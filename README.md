@@ -237,12 +237,54 @@ Warnings and errors go to the Script Editor. If a file cannot be read, `cmds.fil
 raises and nothing is left in the scene. For `reference=True`, Maya itself does not raise
 when a reference fails to load; it prints the error and keeps an empty reference node.
 
-### Not supported yet
+## Known limitations
 
-Importing several animations at once (Time Editor clips), morph target normals/tangents,
-`KHR_animation_pointer`, cameras, lights, an options dialog, and export. Points and lines primitives are skipped with a warning. Files that require
-`KHR_draco_mesh_compression`, `EXT_meshopt_compression` or other unsupported geometry
-extensions are refused with a message naming the extension.
+Geometry
+
+* glTF stores triangles only, so meshes arrive as triangles. They are not merged into quads.
+* Triangles that use the same vertex twice are dropped, with a warning. Maya cannot store them.
+* Points and lines are skipped, with a warning.
+* Draco and meshopt compressed files (`KHR_draco_mesh_compression`,
+  `EXT_meshopt_compression`) do not load. The error names the extension.
+* Cameras and lights in the file are not imported.
+
+Materials and textures
+
+* Shaders are built for Arnold and for Maya's own Standard Surface and OpenPBR nodes. RenderMan,
+  3Delight, Redshift and V-Ray materials are not built yet (see the table under Materials).
+* Occlusion textures are not connected: these shaders have no slot for them.
+* Vertex colours are imported as colour sets but do not tint the material.
+* WebP, KTX2/Basis and AVIF textures are skipped, with a warning. The model still loads.
+* Textures set to clamp at their edges still repeat in Arnold when a texture transform moves
+  the UVs outside the 0 to 1 range.
+* Arnold writes `.tx` files next to the source textures when it renders, unless Auto-TX is
+  turned off in the render settings. This also happens in a read-only asset library.
+
+Animation and deformation
+
+* One animation is imported per load. A file with several animations needs the `animation`
+  option to choose one; importing all of them as Time Editor clips is not available yet.
+* Rotations stored with cubic-spline interpolation are exact at the keys and approximate
+  between them, with a warning. Use `animSampling=bake` for exact values on every frame.
+* Morph targets move points only. Normal and tangent changes stored with a target are not
+  imported; Maya recalculates the normals.
+* `KHR_animation_pointer` (animated material and other properties) is not supported.
+
+Scenes and references
+
+* A referenced glTF file is read again each time the scene opens, so the plug-in must be
+  installed on every machine that opens the scene.
+* When a reference fails to load, Maya does not raise an error; it leaves an empty reference
+  node. Scripts should check `importer.last_report()`.
+* In a Z-up scene the imported top-level nodes are rotated through `offsetParentMatrix`, which
+  some other tools ignore.
+* An import sets the playback range to the animation. Use `timeRange=0` to leave it alone.
+
+General
+
+* Import only. There is no exporter yet.
+* There is no options window yet; options are passed as text (see Options).
+* Tested on Windows only.
 
 ## Tests
 

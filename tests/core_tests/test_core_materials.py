@@ -12,7 +12,8 @@ from gltf_builder import png_bytes
 
 from i3d_gltf.core import Reporter, parse_options, prepare_import
 from i3d_gltf.core import images as img
-from i3d_gltf.core.materials import (RAW, SRGB, NormalInput, TexInput, gltf_uv_transform, place2d_from_transform,
+from i3d_gltf.core.materials import (RAW, SRGB, NormalInput, TexInput, gltf_uv_transform, has_transform,
+                                     manifold2d_from_transform, manifold2d_uv, place2d_from_transform,
                                      place2d_uv_transform)
 
 
@@ -43,6 +44,22 @@ class TestTextureTransformMaths(unittest.TestCase):
 
     def test_identity(self):
         self.assertEqual(place2d_from_transform((0, 0), 0.0, (1, 1)), ((1, 1), (0.0, 0.0), 0.0))
+
+    def test_pxr_manifold_reproduces_gltf_transform(self):
+        # RenderMan PxrManifold2D (invertT on) feeding PxrTexture, which reads t from the top
+        # of the image like glTF: the lookup must be the glTF transform of the un-flipped UV.
+        rnd = random.Random(11)
+        cases = [((0, 0), 0.0, (1, 1)), ((0.25, -0.1), 0.4, (2.0, 0.5)), ((0, 0), 0.3927, (1, 1))]
+        cases += [((rnd.uniform(-2, 2), rnd.uniform(-2, 2)), rnd.uniform(-4, 4),
+                   (rnd.uniform(-3, 3), rnd.uniform(-3, 3))) for _ in range(20)]
+        for off, rot, scale in cases:
+            m = manifold2d_from_transform(off, rot, scale)
+            for U, V in ((0, 0), (1, 0), (0, 0.999), (0.3, 0.7), (0.5, 0.5)):
+                got = manifold2d_uv((U, V), *m)
+                want = gltf_uv_transform((U, 1.0 - V), off, rot, scale)
+                self.assertAlmostEqual(got[0], want[0], 6, (off, rot, scale, U, V))
+                self.assertAlmostEqual(got[1], want[1], 6, (off, rot, scale, U, V))
+        self.assertEqual(manifold2d_from_transform((0, 0), 0.0, (1, 1)), (1.0, 1.0, 0.0, 0.0, 0.0))
 
     def test_rotation_direction_matches_khronos_sample(self):
         # TextureTransformTest: with rotation 22.5 deg, surface UV (0.421, 1.016) must show the
@@ -142,6 +159,11 @@ class TestMaterialPlan(unittest.TestCase):
         names = [t.name for t in self.plan.textures if t.name]
         self.assertEqual(len(names), len(set(names)))
         self.assertIn("Checker_file", names)
+        # the file's own transform is kept for renderers with their own UV nodes (PxrManifold2D)
+        self.assertEqual((t.gltf_offset, t.gltf_rotation, t.gltf_scale), ((0.25, -0.1), 0.4, (2.0, 0.5)))
+        self.assertTrue(has_transform(t))
+        self.assertFalse(has_transform(self.plan.textures[base("Textured")]))
+        self.assertEqual(t.base, "Checker")
 
     def test_alpha(self):
         masked = self.by_name["Masked"]
@@ -249,6 +271,8 @@ class TestOptions(unittest.TestCase):
     def test_shader_option(self):
         self.assertEqual(parse_options("").shader, "aiStandardSurface")
         self.assertEqual(parse_options("shader=openPBRSurface").shader, "openPBRSurface")
+        self.assertEqual(parse_options("shader=PxrSurface").shader, "PxrSurface")
+        self.assertEqual(parse_options("shader=dlPrincipled").shader, "dlPrincipled")
         r = Reporter()
         self.assertEqual(parse_options("shader=lambert", r).shader, "aiStandardSurface")
         self.assertTrue(r.warnings)

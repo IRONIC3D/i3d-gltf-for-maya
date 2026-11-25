@@ -36,7 +36,7 @@ class TestPluginRegistration(MayaTestCase):
 
     def test_version_single_source(self):
         self.assertEqual(cmds.pluginInfo(PLUGIN, q=True, version=True), i3d_gltf.VERSION)
-        self.assertEqual(i3d_gltf.VERSION, "0.4.0")
+        self.assertEqual(i3d_gltf.VERSION, "0.5.0")
         self.assertEqual(i3d_gltf.__version__, i3d_gltf.VERSION)
         repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         with open(os.path.join(repo, "i3dGltf.mod")) as f:

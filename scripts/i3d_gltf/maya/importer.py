@@ -256,7 +256,8 @@ class SceneBuilder(object):
         t = time.time()
         mplan = self.prepared.materials
         if mplan is not None and self.shader_type is not None and mplan.materials:
-            self.materials = shading.MaterialBuilder(mplan, self.shader_type, plan.unit_scale, self.reporter)
+            builder = shading.builder_class(self.shader_type)
+            self.materials = builder(mplan, self.shader_type, plan.unit_scale, self.reporter)
             self.materials.build()
             self.materials.assign(self.shapes)
             summary = dropped_summary(mplan.dropped)

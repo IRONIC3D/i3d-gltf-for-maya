@@ -4,7 +4,7 @@ A pure-Python glTF 2.0 importer for Autodesk Maya. It registers a Maya file tran
 so `.gltf` and `.glb` files work with File > Import, File > Create Reference and `cmds.file`.
 No compiled code and no third-party packages (numpy is not required).
 
-Status: **0.4.0, milestone 4 (options window, installer, release package).** Import only.
+Status: **0.5.0, milestone 5 (RenderMan PxrSurface and 3Delight dlPrincipled materials).** Import only.
 
 ## Works with Dayum
 
@@ -85,6 +85,7 @@ cmds.file(path, reference=True, type="IRONIC3D glTF", namespace="asset",
 # with options
 cmds.file(path, i=True, type="IRONIC3D glTF", options="scale=0.01;importColors=0")
 cmds.file(path, i=True, type="IRONIC3D glTF", options="shader=openPBRSurface;textureDir=D:/tex")
+cmds.file(path, i=True, type="IRONIC3D glTF", options="shader=PxrSurface")
 cmds.file(path, i=True, type="IRONIC3D glTF", options="animation=Walk;animSampling=bake")
 ```
 
@@ -98,9 +99,10 @@ warnings); check its `ok` after a reference, since Maya does not raise when a re
 File > Import, File > Create Reference and File > Open (option box, or the Options pane of the file
 browser with *IRONIC3D glTF* as the file type) show an options window with every option below, in
 Geometry, Materials and Animation sections; hover a control for a one-line explanation. The Shader
-menu lists every type and marks the ones this session cannot build (for example `openPBRSurface` on
-Maya 2024, or Arnold types without MtoA) with the type the import will use instead; opening the window
-never loads MtoA. Maya remembers the last settings (optionVar `IRONIC3D glTFOptions`) for its file
+menu lists every type with its renderer, marks a renderer that is installed but not loaded yet as
+"loaded on import", and marks the ones this session cannot build (for example `openPBRSurface` on
+Maya 2024, Arnold types without MtoA, `PxrSurface` without RenderMan for Maya) with the type the import
+will use instead; opening the window never loads a renderer plug-in. Maya remembers the last settings (optionVar `IRONIC3D glTFOptions`) for its file
 dialogs only; scripted `cmds.file` calls get the defaults plus their own `options`.
 
 From scripts, options are passed as `key=value;key=value` in the `options` flag.
@@ -110,7 +112,7 @@ From scripts, options are passed as `key=value;key=value` in the `options` flag.
 | `scale`         | `1.0`   | Extra scale multiplier. glTF metres always become Maya centimetres (x100); the factor is baked into vertex positions and translations, not put on a root node. |
 | `importNormals` | `1`     | Import `NORMAL` as locked user normals. |
 | `importColors`  | `1`     | Import `COLOR_n` as colour sets. |
-| `shader`        | `aiStandardSurface` | Shader node type for glTF materials: `aiStandardSurface`, `aiOpenPBRSurface`, `openPBRSurface`, `standardSurface`, or `none` (no materials; everything on `initialShadingGroup`). |
+| `shader`        | `aiStandardSurface` | Shader node type for glTF materials: `aiStandardSurface`, `aiOpenPBRSurface`, `openPBRSurface`, `standardSurface`, `PxrSurface` (RenderMan), `dlPrincipled` (3Delight), or `none` (no materials; everything on `initialShadingGroup`). |
 | `textureDir`    | *(empty)* | Base folder for textures extracted from GLB files and data URIs. Empty: `<current project>/<sourceImages file rule>/i3dGltf`. A relative path is relative to the project. A per-file subfolder is always added (see Textures). |
 | `animation`     | `first` | Which glTF animation to import: `first`, `none`, an index (`0`, `1`, ...) or an animation name. An index or name that does not exist gives a warning and imports the first. |
 | `animSampling`  | `keys`  | `keys`: keys exactly at the file's times. `bake`: one key per frame at the scene frame rate, evaluated with the glTF rules (for curves Maya cannot represent exactly, see Animation). |
@@ -204,21 +206,24 @@ Values cannot contain `;`.
 |---|---|---|
 | `aiStandardSurface`, `aiOpenPBRSurface` | Arnold | Available |
 | `standardSurface`, `openPBRSurface` | Maya | Available |
-| `PxrSurface` | RenderMan | Coming next |
-| `dlPrincipled` | 3Delight | Coming next |
+| `PxrSurface` | RenderMan | Available (0.5.0) |
+| `dlPrincipled` | 3Delight | Available (0.5.0) |
 | Redshift material | Redshift | Planned |
 | V-Ray material | V-Ray | Planned |
 
 The `shader` option picks the node type. Availability is checked at import time (never by Maya
 version); if the type is missing, the first available type along this chain is used, with one
-warning. The Arnold plug-in (`mtoa`) is loaded automatically when an Arnold shader is needed and
-installed.
+warning. The renderer's plug-in (`mtoa`, `RenderMan_for_Maya`, `plugin_3delight_for_maya`) is loaded
+automatically when one of its shaders is needed and it is installed; a plug-in that fails to load
+counts as missing. The import never changes the scene's current renderer.
 
 | Requested           | Fallback chain |
 |---------------------|----------------|
 | `aiStandardSurface` | `standardSurface` |
 | `aiOpenPBRSurface`  | `openPBRSurface`, `standardSurface` |
 | `openPBRSurface`    | `aiOpenPBRSurface`, `standardSurface` (Maya 2024 has no `openPBRSurface`) |
+| `PxrSurface`        | `standardSurface` |
+| `dlPrincipled`      | `standardSurface` |
 | `standardSurface`   | always available |
 
 Mapped from glTF:
@@ -242,6 +247,27 @@ Mapped from glTF:
   specular, coat, sheen and transmission are zero; alpha modes still apply.
 * `KHR_materials_pbrSpecularGlossiness`: converted approximately (diffuse as base colour,
   metalness 0, specular colour, roughness = 1 - glossiness), with a warning.
+
+RenderMan (`PxrSurface`), built like Dayum's own RenderMan materials:
+
+* `PxrTexture` per image (shared like the file nodes), `linearize` on for colour maps (base colour,
+  emissive, specular and sheen colour) and off for data maps; the image is linked as it is and
+  RenderMan for Maya's texture manager makes the `.tex` (see Textures).
+* Metal/roughness through `PxrMetallicWorkflow` (base colour, metallic from B, specular from the IOR)
+  into diffuse, specular face and edge colour, with Artistic fresnel (which `PxrMetallicWorkflow`
+  requires) and the GGX model; roughness from G into `specularRoughness`. Factors are `PxrArithmetic`
+  multiplies.
+* Normal map through `PxrNormalMap` (OpenGL orientation, `bumpScale` = normal scale) into
+  `bumpNormal`; emissive into `glowColor` x `glowGain`; alpha into `presence` (`MASK` through
+  `PxrThreshold`); `doubleSided` also turns on the lobes' double-sided switches.
+* `KHR_texture_transform` and a second UV set through `PxrManifold2D` (same image orientation as
+  Maya's file node; `name_uvSet` = `map2`, ...). Sampler wrap modes set `swrap`/`twrap` (RenderMan 28).
+* Clearcoat, sheen (`fuzz`), transmission (`refraction`, `glassIor`) and spec-gloss are approximated.
+
+3Delight (`dlPrincipled`): the same Maya file / place2dTexture networks as for the other shaders
+(3Delight renders those nodes itself), into `color`, `metallic`, `roughness`, `specular_level` (from
+the IOR), `incandescence`, `opacity` and the normal map input (Normal Map (OpenGL), intensity = normal
+scale).
 
 Not mapped, reported once per import in one compact warning: occlusion textures (these shaders
 have no slot), multiplying the base colour by `COLOR_0` (the colour set is still imported),
@@ -276,6 +302,13 @@ dispersion, ...).
 Note for Arnold renders: MtoA's auto-TX conversion writes `.tx` files next to the source
 textures. For read-only asset libraries, turn it off (`defaultArnoldRenderOptions.autotx`).
 
+Note for RenderMan: the importer writes no `.tex` files, but RenderMan for Maya's texture manager
+converts every image when RenderMan renders (and, in an interactive session where RenderMan is the
+current renderer, after a file is imported or opened). It writes `<image>.<ext>.tex` next to each
+source image, and uses its fallback folder `<project>/renderman/textures` only when that folder is
+not writable or *Always Fallback* is on (Preferences > RenderMan > Texture Manager). For read-only
+asset libraries, turn *Always Fallback* on.
+
 Warnings and errors go to the Script Editor. If a file cannot be read, `cmds.file(i=True)`
 raises and nothing is left in the scene. For `reference=True`, Maya itself does not raise
 when a reference fails to load; it prints the error and keeps an empty reference node.
@@ -293,9 +326,16 @@ Geometry
 
 Materials and textures
 
-* Shaders are built for Arnold and for Maya's own Standard Surface and OpenPBR nodes. RenderMan,
-  3Delight, Redshift and V-Ray materials are not built yet (see the table under Materials).
+* Shaders are built for Arnold, RenderMan (`PxrSurface`), 3Delight (`dlPrincipled`) and Maya's own
+  Standard Surface and OpenPBR nodes. Redshift and V-Ray materials are not built yet.
 * Occlusion textures are not connected: these shaders have no slot for them.
+* `PxrSurface`: with RenderMan for Maya before 28, `PxrTexture` has no wrap mode setting, so textures
+  set to clamp or mirror repeat instead (warning). Sheen roughness, the specular colour of
+  `KHR_materials_specular` and `KHR_materials_volume` depth have no `PxrSurface` equivalent.
+* `dlPrincipled`: clearcoat is approximated with the coating thickness; thin-walled transmission,
+  volume depth and specular colour have no equivalent.
+* RenderMan for Maya writes `.tex` files next to the source textures when it converts them, unless
+  *Always Fallback* is on (see Textures). The importer itself never writes them.
 * Vertex colours are imported as colour sets but do not tint the material.
 * WebP, KTX2/Basis and AVIF textures are skipped, with a warning. The model still loads.
 * Textures set to clamp at their edges still repeat in Arnold when a texture transform moves

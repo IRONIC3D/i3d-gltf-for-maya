@@ -390,7 +390,7 @@ class TestReport(MayaTestCase):
         self.assertTrue(rep["ok"])
         self.assertIsNone(rep["error"])
         self.assertEqual(rep["path"], os.path.abspath(rig_path()))
-        self.assertEqual(rep["version"], "0.4.0")
+        self.assertEqual(rep["version"], "0.5.0")
         self.assertEqual(rep["roots"], ["|rp:Rig"])
         self.assertEqual(rep["animation"], {"name": "Main", "index": 0, "start": 0.0, "end": 1.25, "curves": 33})
         self.assertEqual((rep["skins"], rep["blendShapes"]), (4, 4))

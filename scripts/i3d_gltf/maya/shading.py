@@ -6,18 +6,25 @@ exist in this session, never by Maya version:
     aiStandardSurface -> standardSurface
     aiOpenPBRSurface  -> openPBRSurface -> standardSurface
     openPBRSurface    -> aiOpenPBRSurface -> standardSurface
+    PxrSurface        -> standardSurface
+    dlPrincipled      -> standardSurface
     standardSurface   (always available)
 
-When an Arnold type is needed and missing, the ``mtoa`` plug-in is loaded first if it is
-installed. A fallback is reported with one warning.
+When a renderer's type is needed and missing, that renderer's plug-in (``mtoa``,
+``RenderMan_for_Maya``, ``plugin_3delight_for_maya``) is loaded first if it is installed.
+A fallback is reported with one warning.
 
-Networks:
+Networks (MaterialBuilder: Maya's own and Arnold's shaders, and 3Delight's dlPrincipled):
   * one shader + shading group per glTF material, shared by every mesh using it;
   * one file node + place2dTexture per distinct (image, colour space, wrap, transform,
     UV set), shared between materials; factors become per-material multiplyDivide nodes;
   * normal maps go through bump2d (tangent-space normals), which both Viewport 2.0 and
-    Arnold understand;
+    Arnold understand (dlPrincipled: its own normal map input instead);
   * alphaMode MASK uses a condition node (alpha >= cutoff).
+
+RenderMan's PxrSurface (PxrSurfaceBuilder) uses RenderMan's own pattern nodes instead:
+PxrTexture (+ PxrManifold2D), PxrMetallicWorkflow, PxrNormalMap, PxrArithmetic and
+PxrThreshold; see that class.
 """
 
 import math
@@ -28,16 +35,36 @@ import maya.api.OpenMaya as om
 import maya.cmds as cmds
 
 from ..core import images as img
-from ..core.materials import COLOR_SLOTS, MIRRORED_REPEAT, RAW, REPEAT, SRGB, NormalInput, TexInput
+from ..core.materials import (COLOR_SLOTS, MIRRORED_REPEAT, RAW, REPEAT, SRGB, NormalInput, TexInput,
+                              has_transform, manifold2d_from_transform)
 
 DEFAULT_SHADING_GROUP = "initialShadingGroup"
 ARNOLD_PLUGIN = "mtoa"
+RENDERMAN_PLUGIN = "RenderMan_for_Maya"
+DELIGHT_PLUGIN = "plugin_3delight_for_maya"
 ARNOLD_TYPES = frozenset(["aiStandardSurface", "aiOpenPBRSurface"])
+
+#: shader node type -> the renderer plug-in that provides it (types not listed are Maya's own)
+TYPE_PLUGINS = {
+    "aiStandardSurface": ARNOLD_PLUGIN, "aiOpenPBRSurface": ARNOLD_PLUGIN,
+    "PxrSurface": RENDERMAN_PLUGIN, "dlPrincipled": DELIGHT_PLUGIN,
+}
+RENDERER_NAMES = {ARNOLD_PLUGIN: "Arnold", RENDERMAN_PLUGIN: "RenderMan", DELIGHT_PLUGIN: "3Delight"}
+#: plug-in files looked for on MAYA_PLUG_IN_PATH to tell "installed" without loading anything
+PLUGIN_FILES = {
+    ARNOLD_PLUGIN: ("mtoa.mll", "mtoa.so", "mtoa.bundle"),
+    RENDERMAN_PLUGIN: ("RenderMan_for_Maya.py", "RenderMan_for_Maya.mll", "RenderMan_for_Maya.so",
+                       "RenderMan_for_Maya.bundle"),
+    DELIGHT_PLUGIN: ("plugin_3delight_for_maya.mll", "plugin_3delight_for_maya.so",
+                     "plugin_3delight_for_maya.bundle"),
+}
 
 FALLBACK_CHAINS = {
     "aiStandardSurface": ("aiStandardSurface", "standardSurface"),
     "aiOpenPBRSurface": ("aiOpenPBRSurface", "openPBRSurface", "standardSurface"),
     "openPBRSurface": ("openPBRSurface", "aiOpenPBRSurface", "standardSurface"),
+    "PxrSurface": ("PxrSurface", "standardSurface"),
+    "dlPrincipled": ("dlPrincipled", "standardSurface"),
     "standardSurface": ("standardSurface",),
 }
 
@@ -60,12 +87,32 @@ _OPENPBR = {
     "emission_weight": "emissionLuminance", "emission_color": "emissionColor", "opacity": "geometryOpacity",
     "normal": "normalCamera",
 }
+#: 3Delight dlPrincipled (attribute names checked with 3Delight for Maya on Maya 2024-2027).
+#: specular_level / coat_specular_level / refract_ior are derived slots (see DlPrincipledBuilder).
+_DELIGHT = {
+    "base_color": "color", "metalness": "metallic", "roughness": "roughness",
+    "specular_level": "specular_level", "transmission": "refract_weight", "transmission_color": "refract_color",
+    "refract_ior": "refract_ior", "coat": "coating_thickness", "coat_roughness": "coating_roughness",
+    "coat_specular_level": "coating_specular_level", "sheen": "sheen_level", "sheen_color": "sheen_color",
+    "sheen_roughness": "sheen_roughness", "emission_weight": "incandescence_intensity",
+    "emission_color": "incandescence", "opacity": "opacity", "normal": "disp_normal_bump_value",
+}
+#: RenderMan PxrSurface: the slots that map one to one (base colour, metalness, specular,
+#: coat, normals and opacity are wired by PxrSurfaceBuilder itself).
+_PXR = {
+    "base_weight": "diffuseGain", "roughness": "specularRoughness", "emission_color": "glowColor",
+    "emission_weight": "glowGain", "transmission": "refractionGain", "transmission_color": "refractionColor",
+    "thin_walled": "thinGlass", "coat_roughness": "clearcoatRoughness", "sheen": "fuzzGain",
+    "sheen_color": "fuzzColor", "opacity": "presence", "normal": "bumpNormal", "coat_normal": "clearcoatBumpNormal",
+}
 #: slot -> attribute, per shader node type (attribute names checked on Maya 2024-2027).
 SHADER_ATTRS = {
     "standardSurface": _STANDARD,
     "aiStandardSurface": _STANDARD,
     "openPBRSurface": _OPENPBR,
     "aiOpenPBRSurface": _OPENPBR,
+    "dlPrincipled": _DELIGHT,
+    "PxrSurface": _PXR,
 }
 #: OpenPBR emission is a luminance in nits; Arnold renders 1000 nits like emission weight 1
 #: of standard_surface (measured), so glTF emissive strength is multiplied by this.
@@ -99,63 +146,85 @@ def _default_node_type_exists(type_name):
     return type_name in (cmds.allNodeTypes() or [])
 
 
-def _default_load_arnold():
+def _default_load_plugin(plugin):
+    """Load a renderer plug-in if it is not loaded. True when it is loaded afterwards (a
+    plug-in whose initialisation fails can return from loadPlugin without being loaded)."""
     try:
-        if not cmds.pluginInfo(ARNOLD_PLUGIN, q=True, loaded=True):
-            cmds.loadPlugin(ARNOLD_PLUGIN, quiet=True)
-        return True
+        if not cmds.pluginInfo(plugin, q=True, loaded=True):
+            cmds.loadPlugin(plugin, quiet=True)
+        return bool(cmds.pluginInfo(plugin, q=True, loaded=True))
     except RuntimeError:
         return False
 
 
-def _default_arnold_loaded():
+def _default_plugin_loaded(plugin):
     try:
-        return bool(cmds.pluginInfo(ARNOLD_PLUGIN, q=True, loaded=True))
+        return bool(cmds.pluginInfo(plugin, q=True, loaded=True))
     except RuntimeError:
         return False
 
 
-def _default_arnold_installed():
-    """True when the mtoa plug-in file is on MAYA_PLUG_IN_PATH. Only looks at files: never
+def _default_plugin_installed(plugin):
+    """True when the plug-in file is on MAYA_PLUG_IN_PATH. Only looks at files: never
     loads the plug-in."""
     import maya.mel as mel
-    names = ("mtoa.mll", "mtoa.so", "mtoa.bundle")
+    names = PLUGIN_FILES.get(plugin, (plugin + ".mll", plugin + ".py", plugin + ".so", plugin + ".bundle"))
     for folder in (mel.eval('getenv "MAYA_PLUG_IN_PATH"') or "").split(os.pathsep):
         if folder and any(os.path.isfile(os.path.join(folder, n)) for n in names):
             return True
     return False
 
 
-#: Hooks: tests replace these to simulate a session without Arnold / without openPBRSurface.
+#: Hooks: tests replace these to simulate a session without a renderer / without openPBRSurface.
+#: ``load_plugin(name)``, ``plugin_loaded(name)`` and ``plugin_installed(name)`` take the plug-in
+#: name (ARNOLD_PLUGIN, RENDERMAN_PLUGIN, DELIGHT_PLUGIN).
 node_type_exists = _default_node_type_exists
-load_arnold = _default_load_arnold
-arnold_loaded = _default_arnold_loaded
-arnold_installed = _default_arnold_installed
+load_plugin = _default_load_plugin
+plugin_loaded = _default_plugin_loaded
+plugin_installed = _default_plugin_installed
 
 #: shader_availability() statuses
 AVAILABLE = "available"            # the node type exists in this session
-ARNOLD_ON_IMPORT = "arnoldOnImport"  # Arnold type; mtoa is installed but not loaded (loaded by the import)
+LOADED_ON_IMPORT = "loadedOnImport"  # renderer type; its plug-in is installed but not loaded (the import loads it)
 UNAVAILABLE = "unavailable"        # the import falls back to ``fallback``
 
 
-def shader_availability(choices, exists=None, arnold_is_loaded=None, arnold_is_installed=None):
+def _plugin_query(value, hook):
+    """``value`` given to shader_availability for is_loaded / is_installed: None (use the
+    hook), a bool for every plug-in, or a callable taking the plug-in name."""
+    if value is None:
+        return hook
+    if callable(value):
+        return value
+    return lambda _plugin: bool(value)
+
+
+def shader_availability(choices, exists=None, is_loaded=None, is_installed=None):
     """For each ``shader`` option value: (value, status, fallback). Used by the options
-    window to mark types this session cannot build. Never loads a plug-in: an Arnold type
-    with mtoa installed but not loaded is ARNOLD_ON_IMPORT (the import loads mtoa; if that
-    mtoa has no such node the import still falls back, with a warning)."""
+    window to mark types this session cannot build. Never loads a plug-in: a renderer's
+    type with its plug-in installed but not loaded is LOADED_ON_IMPORT (the import loads
+    the plug-in; if that plug-in has no such node the import still falls back, with a
+    warning). ``is_loaded`` / ``is_installed``: None (the hooks), a bool, or a callable
+    taking the plug-in name; installation is looked up lazily, once per plug-in."""
     exists = exists or node_type_exists
-    loaded = arnold_loaded() if arnold_is_loaded is None else arnold_is_loaded
-    installed = None  # looked up lazily: only needed when mtoa is not loaded
+    loaded_q = _plugin_query(is_loaded, plugin_loaded)
+    installed_q = _plugin_query(is_installed, plugin_installed)
+    loaded = {}
+    installed = {}
 
     def state(t):
-        nonlocal installed
         if exists(t):
             return AVAILABLE
-        if t in ARNOLD_TYPES and not loaded:
-            if installed is None:
-                installed = arnold_installed() if arnold_is_installed is None else arnold_is_installed
-            if installed:
-                return ARNOLD_ON_IMPORT
+        plugin = TYPE_PLUGINS.get(t)
+        if plugin is None:
+            return UNAVAILABLE
+        if plugin not in loaded:
+            loaded[plugin] = loaded_q(plugin)
+        if not loaded[plugin]:
+            if plugin not in installed:
+                installed[plugin] = installed_q(plugin)
+            if installed[plugin]:
+                return LOADED_ON_IMPORT
         return UNAVAILABLE
 
     out = []
@@ -174,22 +243,48 @@ def shader_availability(choices, exists=None, arnold_is_loaded=None, arnold_is_i
 def resolve_shader_type(requested, reporter):
     """The node type to build for ``requested`` (an option value other than 'none')."""
     chain = FALLBACK_CHAINS[requested]
-    tried_arnold = False
+    tried = set()
     chosen = None
     for t in chain:
-        if not node_type_exists(t) and t in ARNOLD_TYPES and not tried_arnold:
-            tried_arnold = True
-            load_arnold()
+        plugin = TYPE_PLUGINS.get(t)
+        if not node_type_exists(t) and plugin is not None and plugin not in tried:
+            tried.add(plugin)
+            load_plugin(plugin)
         if node_type_exists(t):
             chosen = t
             break
     if chosen is None:  # standardSurface is part of Maya; reaching this means a broken session
         raise RuntimeError("No usable shader node type (tried %s)" % ", ".join(chain))
     if chosen != requested:
-        why = ("the Arnold plug-in (mtoa) is not available" if requested in ARNOLD_TYPES
+        plugin = TYPE_PLUGINS.get(requested)
+        why = ("the %s plug-in (%s) is not available" % (RENDERER_NAMES[plugin], plugin) if plugin
                else "this Maya has no %s node" % requested)
         reporter.warning("Shader '%s' is not available (%s); using '%s' instead" % (requested, why, chosen))
     return chosen
+
+
+def builder_class(shader_type):
+    """The MaterialBuilder subclass that builds ``shader_type`` networks."""
+    if shader_type == "PxrSurface":
+        return PxrSurfaceBuilder
+    if shader_type == "dlPrincipled":
+        return DlPrincipledBuilder
+    return MaterialBuilder
+
+
+def f0_from_ior(ior):
+    """Normal-incidence reflectance of a dielectric with index ``ior`` (in air)."""
+    if not ior or ior <= 0:
+        ior = 1.5
+    return ((ior - 1.0) / (ior + 1.0)) ** 2
+
+
+def principled_specular(ior, weight=1.0):
+    """The Disney-style 'specular' value of PxrMetallicWorkflow.specular and 3Delight's
+    dlPrincipled.specular_level: F0 = 0.08 * specular (0.5 = F0 0.04 = IOR 1.5; formula from
+    PxrMetallicWorkflow.osl as shipped with RenderMan). glTF's KHR_materials_ior sets F0 from
+    the IOR and KHR_materials_specular's specularFactor scales it."""
+    return f0_from_ior(ior) / 0.08 * weight
 
 
 def pick_color_space(role, available):
@@ -383,12 +478,50 @@ class MaterialBuilder(object):
             return None
         return attr
 
-    def build_material(self, spec):
+    def _shader_node(self, spec):
         shader = self._node(self.shader_type, spec.name, asShader=True)
         sg = self._track(cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=spec.sg_name))
         cmds.connectAttr(shader + ".outColor", sg + ".surfaceShader", force=True)
         self.shaders[spec.index] = shader
         self.shading_groups[spec.index] = sg
+        return shader, sg
+
+    def _plug_exists(self, plug):
+        """True when ``node.attr`` exists; otherwise it is listed in the "no equivalent" warning
+        (a renderer plug-in version without that attribute degrades instead of failing)."""
+        node, attr = plug.split(".", 1)
+        if cmds.attributeQuery(attr.split("[")[0], node=node, exists=True):
+            return True
+        self.plan.dropped["%s.%s (not in this %s version)" % (cmds.nodeType(node), attr,
+                                                             RENDERER_NAMES.get(TYPE_PLUGINS.get(self.shader_type),
+                                                                                "renderer"))] += 1
+        return False
+
+    def _set_attr(self, plug, *values, **kw):
+        if self._plug_exists(plug):
+            cmds.setAttr(plug, *values, **kw)
+
+    def _connect_attr(self, src, dst, **kw):
+        if self._plug_exists(src) and self._plug_exists(dst):
+            cmds.connectAttr(src, dst, **kw)
+
+    def _drop_slot(self, slot):
+        self.plan.dropped["%s (no %s slot on %s)" % (SLOT_FEATURES.get(slot, slot), slot, self.shader_type)] += 1
+
+    def _prepare_inputs(self, spec, inputs):
+        """Shader-specific rewrite of the slot values (in place) before they are applied."""
+
+    def _connect_normal(self, spec, slot, value, shader, attr):
+        bump = self._util("bump2d", spec, slot + "_bump")
+        f = self.files[value.texture]
+        self.material_textures[spec.index].add(value.texture)
+        cmds.connectAttr(f + ".outAlpha", bump + ".bumpValue", force=True)
+        cmds.setAttr(bump + ".bumpInterp", 1)  # tangent space normals
+        cmds.setAttr(bump + ".bumpDepth", value.scale)
+        cmds.connectAttr(bump + ".outNormal", "%s.%s" % (shader, attr), force=True)
+
+    def build_material(self, spec):
+        shader, sg = self._shader_node(spec)
 
         inputs = dict(spec.inputs)
         if "transmission_depth_m" in inputs:
@@ -396,23 +529,17 @@ class MaterialBuilder(object):
         scale = EMISSION_SCALE.get(self.shader_type, 1.0)
         if "emission_weight" in inputs:
             inputs["emission_weight"] = inputs["emission_weight"] * scale
+        self._prepare_inputs(spec, inputs)
         for slot in sorted(inputs):
             value = inputs[slot]
             if slot == "opacity":
                 continue
             attr = self._attr(shader, slot)
             if attr is None:
-                self.plan.dropped["%s (no %s slot on %s)" % (SLOT_FEATURES.get(slot, slot), slot,
-                                                            self.shader_type)] += 1
+                self._drop_slot(slot)
                 continue
             if isinstance(value, NormalInput):
-                bump = self._util("bump2d", spec, slot + "_bump")
-                f = self.files[value.texture]
-                self.material_textures[spec.index].add(value.texture)
-                cmds.connectAttr(f + ".outAlpha", bump + ".bumpValue", force=True)
-                cmds.setAttr(bump + ".bumpInterp", 1)  # tangent space normals
-                cmds.setAttr(bump + ".bumpDepth", value.scale)
-                cmds.connectAttr(bump + ".outNormal", "%s.%s" % (shader, attr), force=True)
+                self._connect_normal(spec, slot, value, shader, attr)
             elif isinstance(value, TexInput):
                 src, is_color = self._source(spec, value, slot)
                 self._connect(src, is_color, shader, attr)
@@ -524,3 +651,274 @@ class MaterialBuilder(object):
             for obj in alive:
                 mod.deleteNode(obj)
             mod.doIt()
+
+
+class DlPrincipledBuilder(MaterialBuilder):
+    """3Delight's dlPrincipled. Textures stay Maya file + place2dTexture nodes (with the same
+    multiplyDivide / reverse / condition utilities as the other shaders): 3Delight for Maya
+    renders those Maya nodes itself (it ships OSL versions of file, place2dTexture, uvChooser,
+    multiplyDivide, reverse and condition), so UV orientation, KHR_texture_transform, sampler
+    wrap / mirror, UV sets and OCIO colour spaces behave exactly as on the Arnold path.
+
+    Per glTF feature: base colour -> color, metallic -> metallic, roughness -> roughness,
+    IOR and KHR_materials_specular's factor -> specular_level (F0 = 0.08 x level, as
+    PxrMetallicWorkflow), emissive -> incandescence (x incandescence_intensity), alpha ->
+    opacity, normal map -> disp_normal_bump_value with type "Normal Map (OpenGL)" and the
+    normal scale as intensity, clearcoat -> coating_thickness (white coating colour),
+    transmission -> refract_weight / refract_ior, sheen -> sheen_level / sheen_color /
+    sheen_roughness. Unlit: base colour black (dlPrincipled has no base weight)."""
+
+    def _prepare_inputs(self, spec, inputs):
+        ior = inputs.pop("ior", None)
+        weight = inputs.pop("specular_weight", 1.0)
+        if isinstance(weight, TexInput):
+            self.plan.dropped["KHR_materials_specular specularTexture (no specular level map on dlPrincipled)"] += 1
+            weight = weight.constant()
+        inputs["specular_level"] = principled_specular(ior or 1.5, weight)
+        if "transmission" in inputs:
+            inputs["refract_ior"] = ior or 1.5
+        coat_ior = inputs.pop("coat_ior", 1.5)
+        if "coat" in inputs:
+            inputs["coat_specular_level"] = principled_specular(coat_ior)
+        if inputs.pop("base_weight", 1.0) == 0.0:  # KHR_materials_unlit
+            inputs["base_color"] = (0.0, 0.0, 0.0)
+
+    def build_material(self, spec):
+        sg = MaterialBuilder.build_material(self, spec)
+        if "coat" in spec.inputs:
+            self._set_attr(self.shaders[spec.index] + ".coating_color", 1.0, 1.0, 1.0, type="double3")
+        return sg
+
+    def _connect_normal(self, spec, slot, value, shader, attr):
+        f = self.files[value.texture]
+        self.material_textures[spec.index].add(value.texture)
+        self._connect_attr(f + ".outColor", "%s.%s" % (shader, attr), force=True)
+        self._set_attr(shader + ".disp_normal_bump_type", 2)  # Normal Map (OpenGL): glTF normal maps are +Y up
+        self._set_attr(shader + ".disp_normal_bump_intensity", value.scale)
+
+
+class PxrSurfaceBuilder(MaterialBuilder):
+    """RenderMan for Maya's PxrSurface, wired the way Dayum builds its own RenderMan materials
+    (PxrTexture, PxrMetallicWorkflow, PxrNormalMap), so an asset looks the same whichever side
+    builds it. Per glTF feature:
+
+      * Textures: one PxrTexture per distinct (image, colour space, sampler, transform, UV
+        set), shared between materials like the file nodes, named ``<image>_tex``. filename =
+        the image itself (RenderMan for Maya's txmanager makes the .tex it renders from).
+        linearize on for colour maps (base colour, emissive, specular and sheen colour), off
+        for data maps (metallic-roughness, occlusion, normal, ...). swrap / twrap from the
+        sampler (REPEAT periodic, MIRRORED_REPEAT mirror, CLAMP_TO_EDGE clamp) where
+        PxrTexture has them (RenderMan 28); older PxrTexture always repeats, with a warning.
+      * KHR_texture_transform and TEXCOORD_n (n > 0): a PxrManifold2D (``<image>_manifold``)
+        into PxrTexture.manifold, values from core.materials.manifold2d_from_transform, its
+        invertT left on (default) so the image is the same way up as with Maya's file node;
+        name_uvSet = ``map<n+1>`` for another UV set. Without either, PxrTexture reads ``st``
+        with its own invertT (default on): the same orientation.
+      * Metal/roughness: PxrMetallicWorkflow (``<material>_metallicWorkflow``: baseColor,
+        metallic, specular from the IOR) into diffuseColor, specularFaceColor and
+        specularEdgeColor. specularFresnelMode is set to Artistic because PxrMetallicWorkflow
+        produces artistic face/edge colours ("The BxDF MUST use Artistic fresnel", its own
+        help text), and specularModelType to GGX, glTF's microfacet model (Dayum sets GGX too).
+        The packed texture's G channel (resultG) drives specularRoughness and B (resultB)
+        metallic.
+      * Factors (base colour, metallic, roughness, emissive, alpha...) are PxrArithmetic
+        multiply nodes per material (``<material>_<slot>_mul``); a factor of 1 connects the
+        PxrTexture directly, as Dayum does.
+      * Normal map: PxrNormalMap (``<material>_normal_normalMap``) fed with the raw
+        PxrTexture's resultRGB, orientation OpenGL (glTF normal maps are +Y up; Dayum sets
+        the preset explicitly too), bumpScale = normalTexture.scale, into bumpNormal.
+      * Emission: glowColor (texture x factor), glowGain = emissive strength.
+      * Alpha: presence. BLEND: base colour alpha x factor. MASK: PxrThreshold (alpha >=
+        alphaCutoff, no transition). OPAQUE: untouched.
+      * doubleSided: the shape's doubleSided as for every shader, plus diffuse, specular,
+        clearcoat and fuzz DoubleSided on the shader.
+      * Clearcoat: clearcoatFaceColor = factor x F0(1.5), clearcoatEdgeColor = factor (GGX);
+        sheen: fuzzGain / fuzzColor; transmission: refractionGain, glassIor, glassRoughness,
+        thinGlass, refractionColor; KHR_materials_pbrSpecularGlossiness: diffuseColor and
+        specularFaceColor directly, white edge.
+    Anything else is listed in the import's one "no equivalent" warning.
+    """
+
+    WRAP = {REPEAT: "periodic", MIRRORED_REPEAT: "mirror", 33071: "clamp"}
+    DOUBLE_SIDED = ("diffuseDoubleSided", "specularDoubleSided", "clearcoatDoubleSided", "fuzzDoubleSided")
+
+    def build_textures(self):
+        no_wrap = []
+        for t in self.plan.textures:
+            if t.status not in (img.OK, img.MISSING):
+                continue
+            base = t.base or t.name
+            tex = self._node("PxrTexture", self.registry.claim(base + "_tex"), asTexture=True)
+            self._set_attr(tex + ".filename", t.path.replace("\\", "/"), type="string")
+            self._set_attr(tex + ".linearize", t.color_space == SRGB)
+            if cmds.attributeQuery("swrap", node=tex, exists=True):
+                self._set_attr(tex + ".swrap", self.WRAP.get(t.wrap_u, "periodic"), type="string")
+                self._set_attr(tex + ".twrap", self.WRAP.get(t.wrap_v, "periodic"), type="string")
+            elif t.wrap_u != REPEAT or t.wrap_v != REPEAT:
+                no_wrap.append(tex)
+            if has_transform(t) or t.texcoord > 0:
+                m = self._node("PxrManifold2D", self.registry.claim(base + "_manifold"), asUtility=True)
+                ss, st, os_, ot, angle = manifold2d_from_transform(t.gltf_offset, t.gltf_rotation, t.gltf_scale)
+                for attr, value in (("scaleS", ss), ("scaleT", st), ("offsetS", os_), ("offsetT", ot),
+                                    ("angle", angle)):
+                    self._set_attr("%s.%s" % (m, attr), value)
+                if t.texcoord > 0:
+                    self._set_attr(m + ".name_uvSet", "map%d" % (t.texcoord + 1), type="string")
+                self._connect_attr(m + ".result", tex + ".manifold", force=True)
+                self.places[t.index] = m
+            self.files[t.index] = tex
+        if no_wrap:
+            self.reporter.warning("This RenderMan's PxrTexture has no wrap mode setting; %s repeat%s instead of "
+                                  "clamping or mirroring" % (", ".join(no_wrap), "" if len(no_wrap) > 1 else "s"))
+
+    def _source(self, material, ti, slot, scale=1.0):
+        """Plug carrying a TexInput's value (x scale); returns (plug, is_color)."""
+        tex = self.files[ti.texture]
+        self.material_textures[material.index].add(ti.texture)
+        if ti.channel == "rgb":
+            src = tex + ".resultRGB"
+            factor = tuple(ti.factor) if ti.factor is not None else (1.0, 1.0, 1.0)
+            factor = tuple(float(f) * scale for f in factor)
+            if factor != (1.0, 1.0, 1.0):
+                ar = self._util("PxrArithmetic", material, slot + "_mul")
+                self._set_attr(ar + ".operation", 1)  # Multiply
+                self._connect_attr(src, ar + ".input1", force=True)
+                self._set_attr(ar + ".input2", *factor, type="double3")
+                src = ar + ".resultRGB"
+            return src, True
+        src = tex + {"r": ".resultR", "g": ".resultG", "b": ".resultB", "a": ".resultA"}[ti.channel]
+        f = (1.0 if ti.factor is None else float(ti.factor)) * scale
+        if ti.invert:  # scale x (1 - factor x value)
+            ar = self._util("PxrArithmetic", material, slot + "_inv")
+            self._set_attr(ar + ".operation", 204)  # Multiply-Add: input1 * input2 + input3
+            self._connect_attr(src, ar + ".input1R", force=True)
+            self._set_attr(ar + ".input2", -f, -f, -f, type="double3")
+            self._set_attr(ar + ".input3", scale, scale, scale, type="double3")
+            src = ar + ".resultR"
+        elif f != 1.0:
+            ar = self._util("PxrArithmetic", material, slot + "_mul")
+            self._set_attr(ar + ".operation", 1)  # Multiply
+            self._connect_attr(src, ar + ".input1R", force=True)
+            self._set_attr(ar + ".input2", f, f, f, type="double3")
+            src = ar + ".resultR"
+        return src, False
+
+    def _connect(self, src, is_color, node, attr):
+        if self._plug_exists("%s.%s" % (node, attr)):
+            MaterialBuilder._connect(self, src, is_color, node, attr)
+
+    def _set(self, node, attr, value, slot):
+        if self._plug_exists("%s.%s" % (node, attr)):
+            MaterialBuilder._set(self, node, attr, value, slot)
+
+    def _apply(self, spec, node, attr, value, slot, scale=1.0):
+        """Connect (TexInput) or set (constant) ``node.attr`` to ``value`` x ``scale``."""
+        if isinstance(value, TexInput):
+            src, is_color = self._source(spec, value, slot, scale)
+            self._connect(src, is_color, node, attr)
+            return
+        if scale != 1.0 and not isinstance(value, bool):
+            value = tuple(v * scale for v in value) if isinstance(value, tuple) else value * scale
+        self._set(node, attr, value, slot)
+
+    def _connect_normal(self, spec, slot, value, shader, attr):
+        nm = self._util("PxrNormalMap", spec, slot + "_normalMap")
+        tex = self.files[value.texture]
+        self.material_textures[spec.index].add(value.texture)
+        self._connect_attr(tex + ".resultRGB", nm + ".inputRGB", force=True)
+        self._set_attr(nm + ".orientation", 0)  # OpenGL: glTF tangent-space normal maps are +Y up
+        self._set_attr(nm + ".bumpScale", value.scale)
+        self._connect_attr(nm + ".resultN", "%s.%s" % (shader, attr), force=True)
+
+    def build_material(self, spec):
+        shader, sg = self._shader_node(spec)
+        # Metal/roughness through PxrMetallicWorkflow needs Artistic fresnel; GGX is glTF's model.
+        self._set_attr(shader + ".specularFresnelMode", 0)  # Artistic
+        self._set_attr(shader + ".specularModelType", 1)    # GGX
+        inputs = dict(spec.inputs)
+        spec_gloss = "KHR_materials_pbrSpecularGlossiness" in spec.converted
+        unlit = "KHR_materials_unlit" in spec.converted
+        ior = inputs.pop("ior", None)
+        weight = inputs.pop("specular_weight", 1.0)
+        if isinstance(weight, TexInput):
+            self.plan.dropped["KHR_materials_specular specularTexture (no specular level map on PxrSurface)"] += 1
+            weight = weight.constant()
+        base_color = inputs.pop("base_color", (1.0, 1.0, 1.0))
+        metal = inputs.pop("metalness", None)
+        spec_color = inputs.pop("specular_color", None)
+        if inputs.pop("transmission_depth_m", None) is not None:
+            self._drop_slot("transmission_depth")
+        if unlit:
+            pass  # diffuseGain 0, no specular: only glow (emission) remains
+        elif spec_gloss:
+            self._apply(spec, shader, "diffuseColor", base_color, "base_color")
+            if spec_color is not None:
+                self._apply(spec, shader, "specularFaceColor", spec_color, "specular_color")
+            self._set_attr(shader + ".specularEdgeColor", 1.0, 1.0, 1.0, type="double3")
+        else:
+            mw = self._util("PxrMetallicWorkflow", spec, "metallicWorkflow")
+            self._set_attr(mw + ".specular", principled_specular(ior or 1.5, weight))
+            self._apply(spec, mw, "baseColor", base_color, "base_color")
+            self._apply(spec, mw, "metallic", 1.0 if metal is None else metal, "metalness")
+            self._connect_attr(mw + ".resultDiffuseRGB", shader + ".diffuseColor", force=True)
+            self._connect_attr(mw + ".resultSpecularFaceRGB", shader + ".specularFaceColor", force=True)
+            self._connect_attr(mw + ".resultSpecularEdgeRGB", shader + ".specularEdgeColor", force=True)
+            if spec_color is not None:
+                self._drop_slot("specular_color")
+        coat = inputs.pop("coat", None)
+        coat_ior = inputs.pop("coat_ior", 1.5)
+        if coat is not None:
+            self._apply(spec, shader, "clearcoatFaceColor", coat, "coat_face", scale=f0_from_ior(coat_ior))
+            self._apply(spec, shader, "clearcoatEdgeColor", coat, "coat_edge")
+            self._set_attr(shader + ".clearcoatModelType", 1)  # GGX
+        if "transmission" in inputs:
+            self._set_attr(shader + ".glassIor", ior or 1.5)
+            if "roughness" in inputs:
+                self._apply(spec, shader, "glassRoughness", inputs["roughness"], "glass_roughness")
+        for slot in sorted(inputs):
+            value = inputs[slot]
+            if slot == "opacity":
+                continue
+            attr = self._attr(shader, slot)
+            if attr is None:
+                self._drop_slot(slot)
+            elif isinstance(value, NormalInput):
+                self._connect_normal(spec, slot, value, shader, attr)
+            else:
+                self._apply(spec, shader, attr, value, slot)
+        if spec.double_sided:
+            for attr in self.DOUBLE_SIDED:
+                self._set_attr("%s.%s" % (shader, attr), True)
+        self._build_opacity(spec, shader, inputs.get("opacity"))
+        return sg
+
+    def _build_opacity(self, spec, shader, value):
+        if value is None or spec.alpha_mode == "OPAQUE":
+            return
+        if not isinstance(value, TexInput):
+            if value != 1.0:
+                self._set_attr(shader + ".presence", float(value))
+            return
+        src, _ = self._source(spec, value, "alpha")
+        if spec.alpha_mode == "MASK":
+            th = self._util("PxrThreshold", spec, "alpha_cutoff")
+            self._connect_attr(src, th + ".inputRGBR", force=True)
+            self._set_attr(th + ".channel", 0)            # Red
+            self._set_attr(th + ".threshold", spec.alpha_cutoff)
+            self._set_attr(th + ".transitionWidth", 0.0)  # hard cut: alpha >= cutoff -> 1
+            self._set_attr(th + ".transitionProfile", 0)  # Linear (a step when the width is 0)
+            src = th + ".resultR"
+        self._connect_attr(src, shader + ".presence", force=True)
+
+    def _link_uv_sets(self, shape, mats, missing):
+        """PxrManifold2D reads another UV set by name (name_uvSet); only check it exists."""
+        textures = set()
+        for m in mats:
+            textures |= self.material_textures.get(m, set())
+        need = [self.plan.textures[t] for t in sorted(textures) if self.plan.textures[t].texcoord > 0]
+        if not need:
+            return
+        names = cmds.polyUVSet(shape.instance_paths[0], q=True, allUVSets=True) or []
+        for t in need:
+            if "map%d" % (t.texcoord + 1) not in names:
+                missing[(t.texcoord, self.files[t.index])].add(shape.name)

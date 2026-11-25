@@ -102,7 +102,7 @@ def step_test_window():
     items = cmds.optionMenu(shader_ctrl, q=True, itemListLong=True) or []
     menu_labels = [cmds.menuItem(i, q=True, label=True) for i in items]
     R["shaderMenu"] = menu_labels
-    check("shader menu lists all types", len(menu_labels) == 5, menu_labels)
+    check("shader menu lists all types", len(menu_labels) == 7, menu_labels)
     check("mtoa not loaded by the dialog", cmds.pluginInfo("mtoa", q=True, loaded=True) == R["mtoaBefore"],
           R["mtoaBefore"])
     annotations = {n: cmds.control(c, q=True, annotation=True) for n, (s, c) in controls.items()}

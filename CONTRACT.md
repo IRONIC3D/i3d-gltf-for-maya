@@ -9,6 +9,17 @@ this file says otherwise.
 A dated note is added here, newest first, whenever something a host relies on changes
 (plug-in name, import call, options, report keys, module locations).
 
+- **2026-11-26, version 0.5.0.**
+  - The `shader` option takes two new values: `PxrSurface` (RenderMan for Maya) and
+    `dlPrincipled` (3Delight for Maya) (sections 3 and 6). With either, `shaderType` in the
+    report is `PxrSurface` / `dlPrincipled` when that type was built, and `materials[].shader`
+    is the PxrSurface / dlPrincipled node. When the renderer is not installed, or its plug-in
+    fails to load, the import falls back to `standardSurface` with a warning and `shaderType`
+    says `standardSurface`.
+  - The change is additive: no other option, default, report key or module location changed,
+    and the minimum version for everything that existed before stays 0.3.0. A host that
+    passes `shader=PxrSurface` or `shader=dlPrincipled` must require **0.5.0 or later**: older
+    versions reject the value with a warning and build the default `aiStandardSurface`.
 - **2026-11-25, version 0.4.0.**
   - New release package `i3dGltf-<version>.zip` with a drag-and-drop installer. The
     installer writes the module file to `<Maya user app dir>/modules/i3dGltf.mod` and the
@@ -94,7 +105,7 @@ either succeeds or raises.
 ## 2. Version
 
 ```python
-cmds.pluginInfo('i3dGltf', query=True, version=True)   # '0.4.0', after the plug-in is loaded
+cmds.pluginInfo('i3dGltf', query=True, version=True)   # '0.5.0', after the plug-in is loaded
 import i3d_gltf; i3d_gltf.__version__                  # same string
 ```
 
@@ -128,7 +139,7 @@ values produce a warning and the default is used.
 | Key | Values | Default | Meaning |
 |---|---|---|---|
 | `scale` | number | `1.0` | Multiplies the size. glTF is in metres and is always converted to Maya's centimetres first, so `1.0` means real-world size. |
-| `shader` | `aiStandardSurface`, `aiOpenPBRSurface`, `openPBRSurface`, `standardSurface`, `none` | `aiStandardSurface` | Shader type to build. `none` builds no materials at all. |
+| `shader` | `aiStandardSurface`, `aiOpenPBRSurface`, `openPBRSurface`, `standardSurface`, `PxrSurface` (0.5.0+), `dlPrincipled` (0.5.0+), `none` | `aiStandardSurface` | Shader type to build. `none` builds no materials at all. |
 | `textureDir` | folder path | empty | Where images embedded in the file are extracted. Empty means the Maya project's `sourceimages/i3dGltf/` folder. |
 | `importNormals` | `0`, `1` | `1` | Use the file's normals. |
 | `importColors` | `0`, `1` | `1` | Import vertex colours as colour sets. |
@@ -230,8 +241,32 @@ A host that supplies its own material for a model should pass `shader=none`. The
 then builds no shaders, shading groups or texture nodes, and every face stays on
 `initialShadingGroup`, ready for the host's assignment.
 
-The plug-in does not create RenderMan (`PxrSurface`) or other third-party renderer
-materials.
+From 0.5.0, `shader=PxrSurface` builds RenderMan for Maya materials and
+`shader=dlPrincipled` 3Delight for Maya materials:
+
+| | `PxrSurface` (RenderMan) | `dlPrincipled` (3Delight) |
+|---|---|---|
+| Renderer plug-in | `RenderMan_for_Maya` | `plugin_3delight_for_maya` |
+| Textures | `PxrTexture`, `linearize` on for colour maps (base colour, emissive), off for data maps (metallic-roughness, normal) | Maya `file` + `place2dTexture`, colour space sRGB / Raw as for the other shaders |
+| Metal/roughness | `PxrMetallicWorkflow` into diffuse / specular face / edge colour; Artistic fresnel, GGX | `metallic`, `roughness` |
+| Normal map | `PxrNormalMap` (OpenGL, `bumpScale` = normal scale) into `bumpNormal` | `disp_normal_bump_value`, type Normal Map (OpenGL), intensity = normal scale |
+| Alpha | `presence` (MASK through `PxrThreshold`) | `opacity` (MASK through `condition`) |
+
+The renderer's plug-in is loaded by the import when it is installed but not loaded, as
+`mtoa` is for the Arnold types. If it is not installed, fails to load, or loads without
+the node type, the import uses `standardSurface` with a warning; `shaderType` gives the
+type that was used. The plug-in never changes the scene's current renderer or render
+settings.
+
+Texture conversion: the plug-in links image files as they are and writes no `.tex` files.
+RenderMan for Maya's texture manager converts the images when RenderMan renders (and, in an
+interactive session with RenderMan as the current renderer, after a file is imported or
+opened). By default it writes `<image>.<ext>.tex` next to each source image, and only uses its
+fallback folder (`<project>/renderman/textures`) when that folder is not writable or the
+RenderMan preference *Always Fallback* (Texture Manager) is on. For read-only asset libraries,
+turn that preference on.
+
+Other renderers (Redshift, V-Ray) are not built.
 
 ## 7. Links
 

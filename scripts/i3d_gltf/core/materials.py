@@ -51,6 +51,11 @@ class TextureSpec:
     repeat_uv: Tuple[float, float] = (1.0, 1.0)
     offset_uv: Tuple[float, float] = (0.0, 0.0)
     rotate_uv: float = 0.0       # radians, counter-clockwise (place2dTexture.rotateUV)
+    # the KHR_texture_transform as the file has it (renderers with their own UV nodes map it themselves)
+    gltf_offset: Tuple[float, float] = (0.0, 0.0)
+    gltf_rotation: float = 0.0
+    gltf_scale: Tuple[float, float] = (1.0, 1.0)
+    base: str = ""               # sanitised image name the node names are built from
     name: str = ""               # file node name
     place_name: str = ""         # place2dTexture name
     path: Optional[str] = None   # filled once images are resolved
@@ -169,6 +174,46 @@ def place2d_from_transform(offset, rotation, scale):
     return (sx, sy), (_clean(ou), _clean(ov)), rotation
 
 
+def has_transform(spec):
+    """True when a TextureSpec has a KHR_texture_transform other than the identity."""
+    return (tuple(spec.gltf_offset) != (0.0, 0.0) or spec.gltf_rotation != 0.0
+            or tuple(spec.gltf_scale) != (1.0, 1.0))
+
+
+def manifold2d_from_transform(offset, rotation, scale):
+    """RenderMan PxrManifold2D values (scaleS, scaleT, offsetS, offsetT, angle in degrees)
+    reproducing a KHR_texture_transform, with the manifold's invertT on (its default) and
+    its center at the origin.
+
+    PxrManifold2D (Manifold.h in RenderMan 26-28, read from the shipped .oso):
+        Q = (s, t);  invertT: t -> floor(t) + 1 - frac(t)       (= 1 - V = glTF v, for V in [0, 1))
+        Q = (scaleS, scaleT) * (Q - center) + (offsetS, offsetT)
+        Q = R(angle) * Q   (counter-clockwise, degrees)          then Q += center
+    and PxrTexture reads t from the top of the image, as glTF does. With Maya UV (U, V) =
+    (u, 1 - v) the manifold starts from the glTF uv, so we need
+        R(angle) * (diag(scale) * uv + o') = R(-rotation) * diag(scale) * uv + offset
+    i.e. angle = -rotation and o' = R(rotation) * offset.
+    """
+    c = math.cos(rotation)
+    s = math.sin(rotation)
+    os_ = c * offset[0] - s * offset[1]
+    ot = s * offset[0] + c * offset[1]
+    return (float(scale[0]), float(scale[1]), _clean(os_), _clean(ot), _clean(-math.degrees(rotation)))
+
+
+def manifold2d_uv(uv, scale_s, scale_t, offset_s, offset_t, angle, invert_t=True):
+    """PxrManifold2D's mapping of a Maya UV (s, t) to the texture lookup (s, t from the top),
+    transcribed from RenderMan's Manifold.h (center at the origin). Used by the tests."""
+    s, t = uv
+    if invert_t:
+        t = math.floor(t) + 1.0 - (t - math.floor(t))
+    s = s * scale_s + offset_s
+    t = t * scale_t + offset_t
+    c = math.cos(math.radians(angle))
+    n = math.sin(math.radians(angle))
+    return (c * s - n * t, n * s + c * t)
+
+
 def _clean(x):
     x = round(x, 9)
     return 0.0 if x == 0 else x
@@ -237,7 +282,7 @@ class _Planner(object):
             return found
         spec = TextureSpec(index=len(self.plan.textures), image=source, color_space=color_space, texcoord=texcoord,
                            wrap_u=wrap_u, wrap_v=wrap_v, repeat_uv=repeat_uv, offset_uv=offset_uv,
-                           rotate_uv=rotate_uv)
+                           rotate_uv=rotate_uv, gltf_offset=offset, gltf_rotation=rotation, gltf_scale=scale)
         self.plan.textures.append(spec)
         self._tex_keys[key] = spec.index
         return spec.index
@@ -467,6 +512,7 @@ def plan_materials(doc, scene_plan, meshes, reader, extract_dir, reporter, regis
             t.status = "unused"
             continue
         base = sanitize(_image_base(doc, t.image), "image_%d" % t.image)
+        t.base = base
         t.name = registry.claim(base + "_file")
         t.place_name = registry.claim(base + "_place2d")
 

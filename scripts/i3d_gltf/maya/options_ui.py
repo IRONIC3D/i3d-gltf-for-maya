@@ -47,7 +47,7 @@ global proc int i3dGltfImportOptions(string $parent, string $action, string $ini
 '''
 
 RENDERER = {"aiStandardSurface": "Arnold", "aiOpenPBRSurface": "Arnold", "standardSurface": "Maya",
-            "openPBRSurface": "Maya"}
+            "openPBRSurface": "Maya", "PxrSurface": "RenderMan", "dlPrincipled": "3Delight"}
 
 LABEL_WIDTH = 110
 FIELD_WIDTH = 130  # minimum; the field column stretches with the pane (the file browser pane is narrow)
@@ -73,8 +73,8 @@ def shader_label(value, status, fallback):
     renderer = RENDERER.get(value, "")
     if status == shading.AVAILABLE:
         return "%s (%s)" % (value, renderer)
-    if status == shading.ARNOLD_ON_IMPORT:
-        return "%s (Arnold, loaded on import)" % value
+    if status == shading.LOADED_ON_IMPORT:
+        return "%s (%s, loaded on import)" % (value, renderer)
     return "%s - not available, uses %s" % (value, fallback or "standardSurface")
 
 

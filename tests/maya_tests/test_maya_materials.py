@@ -185,10 +185,10 @@ class TestShaderTypes(MaterialTestCase):
                 self.assertTrue(cmds.sets(p, isMember="initialShadingGroup"), p)
 
     def test_fallback_without_arnold(self):
-        real_exists, real_load = shading.node_type_exists, shading.load_arnold
+        real_exists, real_load = shading.node_type_exists, shading.load_plugin
         loads = []
         shading.node_type_exists = lambda t: t not in shading.ARNOLD_TYPES and real_exists(t)
-        shading.load_arnold = lambda: loads.append(1) or False
+        shading.load_plugin = lambda plugin: loads.append(plugin) or False
         try:
             for requested, want in (("aiStandardSurface", "standardSurface"),
                                     ("aiOpenPBRSurface", "openPBRSurface" if real_exists("openPBRSurface")
@@ -204,11 +204,11 @@ class TestShaderTypes(MaterialTestCase):
                 fallback = [w for w in self.result.reporter.warnings if w.startswith("Shader '")]
                 self.assertEqual(len(fallback), 0 if want == requested else 1, (requested, fallback))
                 if requested.startswith("ai"):
-                    self.assertEqual(len(loads), 1)  # tried to load mtoa once
+                    self.assertEqual(loads, ["mtoa"])  # tried to load mtoa once
                     self.assertIn("mtoa", fallback[0])
                 self.assertEqual(cmds.nodeType(self.shaders["Red"]), want)
         finally:
-            shading.node_type_exists, shading.load_arnold = real_exists, real_load
+            shading.node_type_exists, shading.load_plugin = real_exists, real_load
 
     def test_fallback_without_native_openpbr(self):
         real_exists = shading.node_type_exists
@@ -223,7 +223,7 @@ class TestShaderTypes(MaterialTestCase):
             shading.node_type_exists = real_exists
 
     def test_arnold_loaded_on_demand(self):
-        if not shading.load_arnold():
+        if not shading.load_plugin("mtoa"):
             self.skipTest("mtoa not installed")
         self.assertTrue(cmds.pluginInfo("mtoa", q=True, loaded=True))
 

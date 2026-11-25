@@ -47,7 +47,8 @@ IMPORT_OPTION_SPECS = (
                help="Import COLOR_n attributes as colour sets.",
                doc="Import COLOR_n as colour sets."),
     OptionSpec("shader", "enum", "aiStandardSurface",
-               choices=("aiStandardSurface", "aiOpenPBRSurface", "openPBRSurface", "standardSurface", "none"),
+               choices=("aiStandardSurface", "aiOpenPBRSurface", "openPBRSurface", "standardSurface", "PxrSurface",
+                        "dlPrincipled", "none"),
                group="Materials", label="Shader",
                help="Shader type built for glTF materials. An unavailable type falls back, with a warning.",
                doc="Shader node type for glTF materials ('none': everything on initialShadingGroup). "

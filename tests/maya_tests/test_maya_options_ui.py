@@ -57,13 +57,29 @@ class TestOptionsScriptWiring(MayaTestCase):
 
     def test_menu_lists_every_shader(self):
         avail = shading.shader_availability(SHADERS, exists=lambda t: t == "standardSurface",
-                                            arnold_is_loaded=False, arnold_is_installed=False)
+                                            is_loaded=False, is_installed=False)
         items = options_ui.shader_menu(SHADERS, avail)
         self.assertEqual([v for v, _ in items], list(SHADERS))
         labels = dict(items)
         self.assertEqual(labels["standardSurface"], "standardSurface (Maya)")
         self.assertEqual(labels["aiStandardSurface"], "aiStandardSurface - not available, uses standardSurface")
         self.assertEqual(labels["none"], "none (no materials)")
+        self.assertEqual(labels["PxrSurface"], "PxrSurface - not available, uses standardSurface")
+        self.assertEqual(labels["dlPrincipled"], "dlPrincipled - not available, uses standardSurface")
+
+    def test_renderer_labels(self):
+        installed = {"RenderMan_for_Maya": True, "plugin_3delight_for_maya": False, "mtoa": True}
+        avail = shading.shader_availability(SHADERS, exists=lambda t: t in ("standardSurface", "dlPrincipled"),
+                                            is_loaded=False, is_installed=installed.get)
+        labels = dict(options_ui.shader_menu(SHADERS, avail))
+        self.assertEqual(labels["PxrSurface"], "PxrSurface (RenderMan, loaded on import)")
+        self.assertEqual(labels["aiStandardSurface"], "aiStandardSurface (Arnold, loaded on import)")
+        self.assertEqual(labels["dlPrincipled"], "dlPrincipled (3Delight)")
+        avail = shading.shader_availability(SHADERS, exists=lambda t: t in ("standardSurface", "PxrSurface"),
+                                            is_loaded=True)
+        labels = dict(options_ui.shader_menu(SHADERS, avail))
+        self.assertEqual(labels["PxrSurface"], "PxrSurface (RenderMan)")
+        self.assertEqual(labels["dlPrincipled"], "dlPrincipled - not available, uses standardSurface")
 
     def test_grouping_follows_spec_table(self):
         groups = options_ui.grouped_specs()
@@ -79,42 +95,48 @@ class TestShaderAvailability(MayaTestCase):
             calls.append(1)
             return True
 
-        old = shading.arnold_installed
-        shading.arnold_installed = installed
+        old = shading.plugin_installed
+        shading.plugin_installed = lambda plugin: installed() if plugin == "mtoa" else False
         try:
             avail = shading.shader_availability(SHADERS, exists=lambda t: t == "standardSurface",
-                                                arnold_is_loaded=False)
+                                                is_loaded=False)
         finally:
-            shading.arnold_installed = old
-        self.assertEqual(avail, [("aiStandardSurface", shading.ARNOLD_ON_IMPORT, None),
-                                 ("aiOpenPBRSurface", shading.ARNOLD_ON_IMPORT, None),
+            shading.plugin_installed = old
+        self.assertEqual(avail, [("aiStandardSurface", shading.LOADED_ON_IMPORT, None),
+                                 ("aiOpenPBRSurface", shading.LOADED_ON_IMPORT, None),
                                  ("openPBRSurface", shading.UNAVAILABLE, "aiOpenPBRSurface"),
                                  ("standardSurface", shading.AVAILABLE, None),
+                                 ("PxrSurface", shading.UNAVAILABLE, "standardSurface"),
+                                 ("dlPrincipled", shading.UNAVAILABLE, "standardSurface"),
                                  ("none", shading.AVAILABLE, None)])
         self.assertEqual(len(calls), 1)  # looked up once, lazily
 
     def test_no_arnold(self):
         avail = dict((v, (s, f)) for v, s, f in shading.shader_availability(
-            SHADERS, exists=lambda t: t in ("standardSurface", "openPBRSurface"), arnold_is_loaded=False,
-            arnold_is_installed=False))
+            SHADERS, exists=lambda t: t in ("standardSurface", "openPBRSurface"), is_loaded=False,
+            is_installed=False))
         self.assertEqual(avail["aiStandardSurface"], (shading.UNAVAILABLE, "standardSurface"))
         self.assertEqual(avail["aiOpenPBRSurface"], (shading.UNAVAILABLE, "openPBRSurface"))
         self.assertEqual(avail["openPBRSurface"], (shading.AVAILABLE, None))
 
     def test_arnold_loaded_without_openpbr(self):
         avail = dict((v, (s, f)) for v, s, f in shading.shader_availability(
-            SHADERS, exists=lambda t: t in ("standardSurface", "aiStandardSurface"), arnold_is_loaded=True))
+            SHADERS, exists=lambda t: t in ("standardSurface", "aiStandardSurface"), is_loaded=True))
         self.assertEqual(avail["aiOpenPBRSurface"], (shading.UNAVAILABLE, "standardSurface"))
         self.assertEqual(avail["aiStandardSurface"], (shading.AVAILABLE, None))
 
-    def test_real_session_never_loads_arnold(self):
-        loaded_before = cmds.pluginInfo("mtoa", q=True, loaded=True)
+    def test_real_session_never_loads_a_renderer(self):
+        plugins = ("mtoa", "RenderMan_for_Maya", "plugin_3delight_for_maya")
+        loaded_before = dict((p, shading.plugin_loaded(p)) for p in plugins)
         avail = shading.shader_availability(SHADERS)
-        self.assertEqual(cmds.pluginInfo("mtoa", q=True, loaded=True), loaded_before)
-        self.assertEqual(dict((v, s) for v, s, _ in avail)["standardSurface"], shading.AVAILABLE)
-        if not loaded_before:
-            self.assertIn(dict((v, s) for v, s, _ in avail)["aiStandardSurface"],
-                          (shading.ARNOLD_ON_IMPORT, shading.UNAVAILABLE))
+        self.assertEqual(dict((p, shading.plugin_loaded(p)) for p in plugins), loaded_before)
+        states = dict((v, s) for v, s, _ in avail)
+        self.assertEqual(states["standardSurface"], shading.AVAILABLE)
+        for value, plugin in (("aiStandardSurface", "mtoa"), ("PxrSurface", "RenderMan_for_Maya"),
+                              ("dlPrincipled", "plugin_3delight_for_maya")):
+            if not loaded_before[plugin]:
+                want = shading.LOADED_ON_IMPORT if shading.plugin_installed(plugin) else shading.UNAVAILABLE
+                self.assertEqual(states[value], want, value)
 
 
 class TestJointRadius(MayaTestCase):

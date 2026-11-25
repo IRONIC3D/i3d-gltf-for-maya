@@ -24,18 +24,24 @@ SUPPORTED_REQUIRED_EXTENSIONS = frozenset([
 ])
 
 # Required extensions that only affect appearance (materials/textures). Geometry and
-# transforms load correctly without them; they are not applied yet, so we warn.
+# transforms load correctly without them. Those in APPEARANCE_APPLIED are interpreted by
+# core/materials.py; the others are loaded with a warning.
 APPEARANCE_ONLY_PREFIXES = ("KHR_materials_",)
-APPEARANCE_ONLY_EXTENSIONS = frozenset(["KHR_texture_transform"])
+APPEARANCE_ONLY_EXTENSIONS = frozenset(["KHR_texture_transform", "KHR_texture_basisu", "EXT_texture_webp",
+                                        "EXT_texture_avif"])
+APPEARANCE_APPLIED = frozenset([
+    "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_materials_ior",
+    "KHR_materials_transmission", "KHR_materials_volume", "KHR_materials_clearcoat", "KHR_materials_sheen",
+    "KHR_materials_specular", "KHR_materials_pbrSpecularGlossiness", "KHR_materials_unlit",
+])
+_TEXTURE_FORMAT_EXTENSIONS = {"KHR_texture_basisu": "KTX2/Basis Universal", "EXT_texture_webp": "WebP",
+                              "EXT_texture_avif": "AVIF"}
 
 # Well-known extensions we cannot decode; named explicitly in the error message.
 KNOWN_UNSUPPORTED_EXTENSIONS = {
     "KHR_draco_mesh_compression": "Draco-compressed geometry",
     "EXT_meshopt_compression": "meshoptimizer-compressed buffers",
     "KHR_meshopt_compression": "meshoptimizer-compressed buffers",
-    "KHR_texture_basisu": "KTX2/Basis Universal textures",
-    "EXT_texture_webp": "WebP textures",
-    "EXT_texture_avif": "AVIF textures",
     "EXT_mesh_gpu_instancing": "GPU instancing",
 }
 
@@ -53,8 +59,14 @@ def check_required_extensions(required, reporter):
     for name in required:
         if name in SUPPORTED_REQUIRED_EXTENSIONS:
             continue
+        if name in APPEARANCE_APPLIED:
+            continue
+        if name in _TEXTURE_FORMAT_EXTENSIONS:
+            reporter.warning("Required extension '%s': Maya cannot read %s images; textures that only "
+                             "exist in that format are skipped" % (name, _TEXTURE_FORMAT_EXTENSIONS[name]))
+            continue
         if name in APPEARANCE_ONLY_EXTENSIONS or name.startswith(APPEARANCE_ONLY_PREFIXES):
-            reporter.warning("Required extension '%s' affects materials only and is not applied yet" % name)
+            reporter.warning("Required extension '%s' affects materials only and is not applied" % name)
             continue
         bad.append(name)
     if bad:

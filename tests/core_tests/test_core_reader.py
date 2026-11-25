@@ -188,8 +188,7 @@ class TestValidation(unittest.TestCase):
 
 class TestRequiredExtensions(unittest.TestCase):
     def test_unsupported_named(self):
-        for ext in ("KHR_draco_mesh_compression", "EXT_meshopt_compression", "KHR_texture_basisu",
-                    "VENDOR_something_unknown"):
+        for ext in ("KHR_draco_mesh_compression", "EXT_meshopt_compression", "VENDOR_something_unknown"):
             b = fixtures.unsupported_builder(ext)
             with self.assertRaises(GltfUnsupportedError) as ctx:
                 loads(b.glb_bytes())
@@ -197,20 +196,27 @@ class TestRequiredExtensions(unittest.TestCase):
 
     def test_multiple_named(self):
         b = fixtures.unsupported_builder()
-        b.json["extensionsRequired"].append("KHR_texture_basisu")
+        b.json["extensionsRequired"].append("EXT_meshopt_compression")
         with self.assertRaises(GltfUnsupportedError) as ctx:
             loads(b.glb_bytes())
         self.assertIn("KHR_draco_mesh_compression", str(ctx.exception))
-        self.assertIn("KHR_texture_basisu", str(ctx.exception))
+        self.assertIn("EXT_meshopt_compression", str(ctx.exception))
 
     def test_supported_and_appearance_only(self):
         r = Reporter()
         loads(fixtures.unsupported_builder("KHR_mesh_quantization").glb_bytes(), reporter=r)
         self.assertEqual(r.warnings, [])
-        r = Reporter()
-        loads(fixtures.unsupported_builder("KHR_materials_unlit").glb_bytes(), reporter=r)
-        self.assertEqual(len(r.warnings), 1)
-        self.assertIn("KHR_materials_unlit", r.warnings[0])
+        for handled in ("KHR_materials_unlit", "KHR_texture_transform", "KHR_materials_clearcoat"):
+            r = Reporter()
+            loads(fixtures.unsupported_builder(handled).glb_bytes(), reporter=r)
+            self.assertEqual(r.warnings, [], handled)
+        for name, text in (("KHR_materials_iridescence", "not applied"), ("KHR_texture_basisu", "KTX2"),
+                           ("EXT_texture_webp", "WebP")):
+            r = Reporter()
+            loads(fixtures.unsupported_builder(name).glb_bytes(), reporter=r)  # geometry still loads
+            self.assertEqual(len(r.warnings), 1)
+            self.assertIn(name, r.warnings[0])
+            self.assertIn(text, r.warnings[0])
 
     def test_used_but_not_required_is_fine(self):
         b = tri_builder()

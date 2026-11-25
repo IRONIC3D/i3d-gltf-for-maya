@@ -50,6 +50,7 @@ class ScenePlan:
     nodes: Dict[int, NodePlan]
     shapes: List[ShapePlan]
     unit_scale: float
+    names: Optional[NameRegistry] = None  # every name claimed so far (materials claim after nodes)
 
 
 def _parents(doc):
@@ -173,4 +174,4 @@ def build_scene_plan(doc, options, reporter=None):
         target.nodes.append(i)
         nodes[i].shape = target.index
     return ScenePlan(scene_index=scene_index, roots=roots, order=order, nodes=nodes, shapes=shapes,
-                     unit_scale=factor)
+                     unit_scale=factor, names=registry)

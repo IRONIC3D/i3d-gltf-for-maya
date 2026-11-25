@@ -20,10 +20,13 @@ import maya.api.OpenMaya as om
 import maya.cmds as cmds
 
 from ..core import Reporter, parse_options, prepare_import
+from ..core import images as img
+from ..core.materials import dropped_summary
+from . import shading
 from .mesh_builder import create_mesh_shape
 from .report import maya_sink
 
-DEFAULT_SHADING_GROUP = "initialShadingGroup"
+DEFAULT_SHADING_GROUP = shading.DEFAULT_SHADING_GROUP
 
 _last_result = None
 _last_error = None
@@ -91,6 +94,43 @@ class ImportResult(object):
         self.shapes = []      # ShapeResult, in ScenePlan.shapes order
         self.timings = {}     # seconds: "prepare" (pure Python), "build" (Maya)
         self.root_indices = list(prepared.plan.roots) if prepared else []
+        self.shader_type = None   # node type actually used (after fallback), None for shader=none
+        self._shaders = {}        # glTF material index -> MObjectHandle
+        self._shading_groups = {}
+        self._file_nodes = {}     # MaterialPlan texture index -> MObjectHandle
+
+    @staticmethod
+    def _names(handles):
+        return dict((k, om.MFnDependencyNode(h.object()).name()) for k, h in handles.items()
+                    if h.isValid() and h.isAlive())
+
+    @property
+    def shaders(self):
+        """{glTF material index: shader node name} (current names, with namespace)."""
+        return self._names(self._shaders)
+
+    @property
+    def shading_groups(self):
+        return self._names(self._shading_groups)
+
+    @property
+    def file_nodes(self):
+        """{MaterialPlan texture index: file node name}"""
+        return self._names(self._file_nodes)
+
+    @property
+    def material_plan(self):
+        return self.prepared.materials if self.prepared else None
+
+    def texture_stats(self):
+        """(linked file nodes, of which the file is missing, images skipped as unreadable/failed)."""
+        plan = self.material_plan
+        if plan is None:
+            return 0, 0, 0
+        linked = [plan.textures[i] for i in self._file_nodes]
+        missing = sum(1 for t in linked if t.status == img.MISSING)
+        skipped = sum(1 for f in plan.images.values() if f.status in (img.UNSUPPORTED, img.FAILED))
+        return len(linked), missing, skipped
 
     @property
     def messages(self):
@@ -114,12 +154,14 @@ _Z_UP_MATRIX = om.MMatrix([1.0, 0.0, 0.0, 0.0,
 
 
 class SceneBuilder(object):
-    def __init__(self, prepared, reporter):
+    def __init__(self, prepared, reporter, shader_type=None):
         self.prepared = prepared
         self.reporter = reporter
+        self.shader_type = shader_type
         self.created_roots = []
         self.transforms = {}
         self.shapes = []
+        self.materials = None  # shading.MaterialBuilder
 
     def build(self):
         plan = self.prepared.plan
@@ -128,7 +170,16 @@ class SceneBuilder(object):
             self._create_transform(plan.nodes[i], z_up)
         for shape_plan in plan.shapes:
             self._create_shape(shape_plan)
-        self._assign_default_shading()
+        mplan = self.prepared.materials
+        if mplan is not None and self.shader_type is not None and mplan.materials:
+            self.materials = shading.MaterialBuilder(mplan, self.shader_type, plan.unit_scale, self.reporter)
+            self.materials.build()
+            self.materials.assign(self.shapes)
+            summary = dropped_summary(mplan.dropped)
+            if summary:
+                self.reporter.warning(summary)
+        else:
+            self._assign_default_shading()
 
     def _create_transform(self, node, z_up):
         parent = self.transforms[node.parent].object() if node.parent is not None else om.MObject.kNullObj
@@ -178,7 +229,9 @@ class SceneBuilder(object):
             cmds.sets(paths, e=True, forceElement=DEFAULT_SHADING_GROUP)
 
     def cleanup(self):
-        """Delete every node created so far (all of them live under the created roots)."""
+        """Delete every node created so far (DAG nodes live under the created roots)."""
+        if self.materials is not None:
+            self.materials.cleanup()
         alive = [h.object() for h in self.created_roots if h.isValid() and h.isAlive()]
         if not alive:
             return
@@ -197,9 +250,15 @@ def import_file(path, options_string="", sink=maya_sink):
     t0 = time.time()
     try:
         options = parse_options(options_string, reporter)
-        prepared = prepare_import(path, options, reporter)
+        shader_type = None
+        texture_root = None
+        if options.shader != "none":
+            shader_type = shading.resolve_shader_type(options.shader, reporter)
+            texture_root = (shading.expand_project_path(options.textureDir) if options.textureDir
+                            else shading.default_texture_root())
+        prepared = prepare_import(path, options, reporter, texture_root=texture_root)
         t1 = time.time()
-        builder = SceneBuilder(prepared, reporter)
+        builder = SceneBuilder(prepared, reporter, shader_type)
         try:
             builder.build()
         except Exception:
@@ -214,6 +273,12 @@ def import_file(path, options_string="", sink=maya_sink):
     result = ImportResult(path, options, prepared, reporter)
     result.transforms = builder.transforms
     result.shapes = builder.shapes
+    result.shader_type = shader_type
+    if builder.materials is not None:
+        mb = builder.materials
+        result._shaders = mb.handle_map(mb.shaders)
+        result._shading_groups = mb.handle_map(mb.shading_groups)
+        result._file_nodes = mb.handle_map(mb.files)
     result.timings = {"prepare": t1 - t0, "build": time.time() - t1}
     _last_result = result
     return result

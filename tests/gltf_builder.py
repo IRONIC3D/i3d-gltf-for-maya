@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import struct
+import zlib
 
 FMT = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}
 SIZE = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
@@ -28,6 +29,22 @@ def flatten(values):
         else:
             out.append(v)
     return out
+
+
+def png_bytes(width, height, pixel, alpha=True):
+    """Encode a PNG. ``pixel(x, y)`` returns an (r, g, b, a) tuple of 0-255 ints."""
+    ch = 4 if alpha else 3
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        for x in range(width):
+            raw.extend(pixel(x, y)[:ch])
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6 if alpha else 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(bytes(raw)))
+            + chunk(b"IEND", b""))
 
 
 class GltfBuilder(object):
@@ -158,8 +175,34 @@ class GltfBuilder(object):
         node.update(kw)
         return self._add("nodes", node)
 
-    def add_material(self, name):
-        return self._add("materials", {"name": name})
+    def add_material(self, name, **props):
+        mat = {"name": name} if name is not None else {}
+        mat.update(props)
+        return self._add("materials", mat)
+
+    def add_image(self, data=None, mime="image/png", mode="bufferView", uri=None, name=None):
+        """mode: 'bufferView' (GLB-style), 'datauri' or 'uri' (external file named ``uri``)."""
+        img = {}
+        if mode == "bufferView":
+            img["bufferView"] = self.add_buffer_view(data)
+            img["mimeType"] = mime
+        elif mode == "datauri":
+            img["uri"] = "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii"))
+        else:
+            img["uri"] = uri
+        if name is not None:
+            img["name"] = name
+        return self._add("images", img)
+
+    def add_texture(self, source, sampler=None, **extra):
+        tex = {"source": source} if source is not None else {}
+        if sampler is not None:
+            tex["sampler"] = sampler
+        tex.update(extra)
+        return self._add("textures", tex)
+
+    def add_sampler(self, wrap_s=10497, wrap_t=10497):
+        return self._add("samplers", {"wrapS": wrap_s, "wrapT": wrap_t})
 
     def add_scene(self, nodes, name=None, default=True):
         s = {"nodes": list(nodes)}

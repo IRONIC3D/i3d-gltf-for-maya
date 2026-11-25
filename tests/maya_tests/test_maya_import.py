@@ -32,11 +32,11 @@ class TestPluginRegistration(MayaTestCase):
         self.assertTrue(cmds.translator(T, q=True, readSupport=True))
         self.assertFalse(cmds.translator(T, q=True, writeSupport=True))
         self.assertEqual(cmds.translator(T, q=True, defaultOptions=True),
-                         "scale=1.0;importNormals=1;importColors=1")
+                         "scale=1.0;importNormals=1;importColors=1;shader=aiStandardSurface;textureDir=")
 
     def test_version_single_source(self):
         self.assertEqual(cmds.pluginInfo(PLUGIN, q=True, version=True), i3d_gltf.VERSION)
-        self.assertEqual(i3d_gltf.VERSION, "0.1.0")
+        self.assertEqual(i3d_gltf.VERSION, "0.2.0")
         repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         with open(os.path.join(repo, "i3dGltf.mod")) as f:
             self.assertIn(" %s " % i3d_gltf.VERSION, f.read())
@@ -173,8 +173,12 @@ class TestImport(MayaTestCase):
         self.assertVecAlmost((n.x, n.y, n.z), (0, 0, 1))
         # LINES primitive skipped with a collected warning
         self.assertTrue(any("LINES" in w for w in result.reporter.warnings))
-        # default shading group for now
-        self.assertTrue(cmds.sets(shape.instance_paths[0], isMember="initialShadingGroup"))
+        # per-face materials; the primitive without a material stays on initialShadingGroup
+        path = shape.instance_paths[0]
+        self.assertTrue(cmds.sets(path + ".f[0]", isMember="s:matASG"))
+        self.assertTrue(cmds.sets(path + ".f[1:3]", isMember="s:matBSG"))
+        self.assertTrue(cmds.sets(path + ".f[4:5]", isMember="initialShadingGroup"))
+        self.assertTrue(cmds.sets(path + ".f[6]", isMember="s:matBSG"))
 
     def test_scale_option_baked(self):
         import_file(scene_files()[0], "s", options="scale=0.01")
@@ -208,7 +212,7 @@ class TestImport(MayaTestCase):
         cube = result.shape_for_mesh(0)[0]
         self.assertEqual(len(cube.instance_paths), 2)
         for p in cube.instance_paths:
-            self.assertTrue(cmds.sets(p, isMember="initialShadingGroup"), p)
+            self.assertTrue(cmds.sets(p, isMember="s:matASG"), p)
 
     def test_deterministic_names(self):
         gltf, glb = scene_files()
@@ -315,7 +319,7 @@ class TestReference(MayaTestCase):
         self.assertEqual(cmds.getAttr("r1:_3d_child.visibility"), False)
         self.assertEqual(sorted(cmds.ls("r1:*", "r2:*", long=True, dag=True)), before)
         self.assertTrue(cmds.referenceQuery("r1:Cube_3", isNodeReferenced=True))
-        self.assertTrue(cmds.sets("r1:Cube|r1:CubeShape", isMember="initialShadingGroup"))
+        self.assertTrue(cmds.sets("r1:Cube|r1:CubeShape", isMember="r1:matASG"))
         edits = cmds.referenceQuery(cmds.referenceQuery(gltf, referenceNode=True), editStrings=True)
         self.assertTrue(any("r1:Cube_3.translate" in e and "7.5" in e for e in edits), edits)
 

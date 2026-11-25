@@ -30,6 +30,13 @@ IMPORT_OPTION_SPECS = (
                doc="Import NORMAL as locked user normals."),
     OptionSpec("importColors", "bool", True,
                doc="Import COLOR_n as colour sets."),
+    OptionSpec("shader", "enum", "aiStandardSurface",
+               choices=("aiStandardSurface", "aiOpenPBRSurface", "openPBRSurface", "standardSurface", "none"),
+               doc="Shader node type for glTF materials ('none': everything on initialShadingGroup). "
+                   "An unavailable type falls back (see maya/shading.py) with a warning."),
+    OptionSpec("textureDir", "str", "",
+               doc="Folder for textures extracted from GLB / data URIs (a per-file subfolder is added). "
+                   "Default: <project>/sourceimages/i3dGltf."),
 )
 
 _TRUE = ("1", "true", "yes", "on")

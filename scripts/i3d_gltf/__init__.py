@@ -5,7 +5,7 @@ Package layout:
     i3d_gltf.maya  - Maya scene builders and the file translator implementation
 """
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 __version__ = VERSION
 VENDOR = "IRONIC3D"
 TRANSLATOR_NAME = "IRONIC3D glTF"

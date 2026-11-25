@@ -20,12 +20,12 @@ import maya.OpenMayaMPx as ompx
 from .. import TRANSLATOR_NAME
 from ..core import GltfError
 from ..core.options import default_options_string
-from . import importer
+from . import importer, options_ui
 
 EXTENSIONS = (".gltf", ".glb")
 FILTER = "*.gltf;*.glb"
-#: MEL procedure for an options UI. Empty until the options UI milestone.
-OPTIONS_SCRIPT = ""
+#: MEL procedure Maya's file dialogs call for the import options (see options_ui).
+OPTIONS_SCRIPT = options_ui.MEL_PROC
 
 
 class GltfTranslator(ompx.MPxFileTranslator):
@@ -86,7 +86,8 @@ def creator():
 
 
 def register(plugin_fn):
-    plugin_fn.registerFileTranslator(TRANSLATOR_NAME, None, creator, OPTIONS_SCRIPT or None,
+    options_ui.define_mel_procedure()
+    plugin_fn.registerFileTranslator(TRANSLATOR_NAME, None, creator, OPTIONS_SCRIPT,
                                      default_options_string(), False)
 
 

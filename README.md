@@ -4,7 +4,7 @@ A pure-Python glTF 2.0 importer for Autodesk Maya. It registers a Maya file tran
 so `.gltf` and `.glb` files work with File > Import, File > Create Reference and `cmds.file`.
 No compiled code and no third-party packages (numpy is not required).
 
-Status: **0.3.0, milestone 3 (skins, morph targets, animation).** Import only.
+Status: **0.4.0, milestone 4 (options window, installer, release package).** Import only.
 
 ## Works with Dayum
 
@@ -23,6 +23,35 @@ The code is plain Python 3.10+ and has no platform-specific parts, but macOS and
 
 ## Install
 
+### Release zip (users)
+
+1. Download `i3dGltf-<version>.zip` from https://ironic3d.com.au/apps/ironic3d-gltf-for-maya or the
+   GitHub releases page and extract it anywhere (spaces and non-ASCII characters in that path are fine).
+2. Drag `install_i3dGltf.py` from the extracted folder onto a Maya viewport and click Install.
+3. Maya shows an *Untrusted Plugin Loading* security warning for the new folder, once, in that session:
+   click Allow. The plug-in loads at once (no restart). The installer then offers to turn on auto-load.
+
+The installer copies the module to `<Maya user app dir>/modules/i3dGltf/` and writes
+`<Maya user app dir>/modules/i3dGltf.mod` (first line `+ i3dGltf <version> ./i3dGltf`). The user app
+dir comes from Maya (`cmds.internalVar(userAppDir=True)`, usually `Documents/maya`, which may be inside
+OneDrive). Maya 2024-2027 all read the `.mod` files in that version-independent `modules` folder at
+start-up without any environment variable, so one install serves every Maya version on the machine.
+The installer never changes Maya's security preferences; from the next start Maya finds the plug-in
+through its modules folder and loads it without a warning.
+
+* Upgrade: drop the newer installer (an older loaded copy is unloaded and replaced in the running
+  session). A downgrade asks for confirmation.
+* Uninstall: drop `uninstall_i3dGltf.py` (in the zip and in the installed `i3dGltf` folder). It removes
+  exactly the files the installer recorded in `i3dGltf/install_manifest.json`, the `.mod` file and the
+  folders left empty, and turns off auto-load in the running Maya version.
+* Command line: `mayapy install_i3dGltf.py [--autoload] [--uninstall] [--force] [--json FILE]`.
+* Not supported: a Maya user folder whose path contains non-ASCII characters (for example a Windows
+  user name with accents). Maya 2024-2026 do not read module files there, and Maya 2027 reads them
+  but cannot run a Python plug-in from there (measured with mayapy); the installer says so and stops. Use the developer route below with an
+  ASCII folder instead.
+
+### Developer (MAYA_MODULE_PATH)
+
 Add the repository folder to `MAYA_MODULE_PATH` (it contains `i3dGltf.mod`), for example in `Maya.env`:
 
 ```
@@ -35,6 +64,9 @@ Then load the plug-in from the Plug-in Manager, or:
 import maya.cmds as cmds
 cmds.loadPlugin("i3dGltf")
 ```
+
+Build the release zip with `python tools/build_release.py` (writes `dist/i3dGltf-<version>.zip`;
+two builds of the same tree are byte-identical).
 
 ## Usage
 
@@ -63,7 +95,15 @@ warnings); check its `ok` after a reference, since Maya does not raise when a re
 
 ### Options
 
-Passed as `key=value;key=value` in the `options` flag.
+File > Import, File > Create Reference and File > Open (option box, or the Options pane of the file
+browser with *IRONIC3D glTF* as the file type) show an options window with every option below, in
+Geometry, Materials and Animation sections; hover a control for a one-line explanation. The Shader
+menu lists every type and marks the ones this session cannot build (for example `openPBRSurface` on
+Maya 2024, or Arnold types without MtoA) with the type the import will use instead; opening the window
+never loads MtoA. Maya remembers the last settings (optionVar `IRONIC3D glTFOptions`) for its file
+dialogs only; scripted `cmds.file` calls get the defaults plus their own `options`.
+
+From scripts, options are passed as `key=value;key=value` in the `options` flag.
 
 | Option          | Default | Meaning |
 |-----------------|---------|---------|
@@ -108,6 +148,9 @@ Values cannot contain `;`.
 * Joint rotation stays in the `rotate` channels (`jointOrient` and `rotateAxis` are zero), so
   animation maps one to one, and `segmentScaleCompensate` is off (glTF scale semantics: a
   child inherits its parent's scale).
+* Joint display radius follows the skeleton size: 1% of the rest-pose extent of the skeleton,
+  at most half its median bone length, divided by each joint's world scale (Maya draws the radius
+  in joint space). A lone joint gets 1 cm x `scale`.
 * One `skinCluster` per skinned shape (`<node>_skinCluster`): classic linear skinning, one
   influence per skin joint in skin order, `bindPreMatrix` = the file's `inverseBindMatrices`
   (translation scaled like everything else), every `JOINTS_n`/`WEIGHTS_n` set (more than 4
@@ -283,7 +326,9 @@ Scenes and references
 General
 
 * Import only. There is no exporter yet.
-* There is no options window yet; options are passed as text (see Options).
+* The options window does not list the animations in the file; type a name or index, or pick
+  `first` / `none`.
+* The installer does not support a Maya user folder with non-ASCII characters in its path (see Install).
 * Tested on Windows only.
 
 ## Tests
@@ -293,6 +338,13 @@ python tests/run_all.py          # core tests with this Python, then core + Maya
 mayapy tests/run_suite.py --maya # one Maya version
 python tests/run_suite.py        # core tests only, no Maya needed
 ```
+
+The Maya tests include the release installer end to end (`test_maya_installer.py`: fresh install,
+upgrade over a loaded older copy, downgrade refusal, uninstall, then a new mayapy that finds the module
+with no `MAYA_MODULE_PATH`). GUI checks need a desktop and are run separately:
+`python tests/gui/run_gui_tests.py 2024 2027` drives isolated GUI Maya sessions (own `MAYA_APP_DIR`,
+no userSetup, killed by PID on timeout) through the options window, Maya's option boxes and file
+browser, and the drag-and-drop installer, and saves screenshots of Maya's own windows.
 
 Test fixtures are generated in code. `tests/perf_large_mesh.py` times a 1M-triangle import,
 `tests/perf_skinned.py` a 100k-vertex skinned and animated import, and

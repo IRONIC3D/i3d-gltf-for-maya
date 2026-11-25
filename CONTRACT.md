@@ -4,6 +4,29 @@ For host applications that detect and drive IRONIC3D glTF for Maya from their ow
 scripts. Everything here is stable from version 0.3.0 onwards unless a later entry in
 this file says otherwise.
 
+## Change notes
+
+A dated note is added here, newest first, whenever something a host relies on changes
+(plug-in name, import call, options, report keys, module locations).
+
+- **2026-11-25, version 0.4.0.**
+  - New release package `i3dGltf-<version>.zip` with a drag-and-drop installer. The
+    installer writes the module file to `<Maya user app dir>/modules/i3dGltf.mod` and the
+    module folder to `<Maya user app dir>/modules/i3dGltf/` (section 1). The module file's
+    path field is now relative: `+ i3dGltf 0.4.0 ./i3dGltf` (relative to the folder that
+    holds the .mod file).
+  - The translator now has an options window (File > Import / Create Reference / Open
+    option boxes). It edits the same `options` keys; no option was added, removed or
+    renamed, and no default changed. Maya remembers the window's last settings in the
+    optionVar `IRONIC3D glTFOptions`; that only affects the file dialogs, never a
+    `cmds.file` call, with or without `options` (section 3).
+  - In the Maya session that runs the installer, Maya shows its "Untrusted Plugin Loading"
+    warning once for the new folder; from the next start the plug-in loads through the
+    module without a warning (section 1).
+  - Joints get a display radius relative to the skeleton size instead of Maya's default.
+  - Nothing a 0.3.0 host relies on changed; the minimum version stays 0.3.0.
+- **2026-11-25, version 0.3.0:** first version of this contract.
+
 ## 1. Identity
 
 | | |
@@ -20,22 +43,50 @@ serves every supported Maya version.
 
 ### Where the module file lives
 
-Maya finds the plug-in through `i3dGltf.mod`. A host can detect an install without
-running Maya by looking for that file in Maya's module folders:
+Maya finds the plug-in through `i3dGltf.mod`.
 
-- `<Documents>\maya\modules\`
+**Release installer (the normal install, from 0.4.0).** `install_i3dGltf.py` from the
+release zip writes
+
+| | Maya expression | Typical Windows path |
+|---|---|---|
+| Module file | `cmds.internalVar(userAppDir=True) + 'modules/i3dGltf.mod'` | `C:\Users\<name>\Documents\maya\modules\i3dGltf.mod` |
+| Module folder | `cmds.internalVar(userAppDir=True) + 'modules/i3dGltf/'` | `C:\Users\<name>\Documents\maya\modules\i3dGltf\` |
+
+With Documents redirected into OneDrive, Maya's user app dir (and so these files) is
+`C:\Users\<name>\OneDrive\Documents\maya\modules\`; the installer never builds the path
+itself, it uses what Maya reports. With `MAYA_APP_DIR` set the files are under
+`%MAYA_APP_DIR%\modules\` (that case is what the installer tests run). The `modules` folder
+directly under the user app dir is version independent: Maya 2024, 2025, 2026 and 2027
+all read it at start-up without any environment variable (verified on each), so one
+install serves every Maya version. The module folder also holds `install_manifest.json`
+(the list of installed files, used by the uninstaller) and the installer scripts.
+The installer refuses a user app dir whose path is not plain ASCII: Maya cannot load the
+plug-in from there.
+
+Maya's plug-in security (Preferences > Security, on by default in 2024-2027) trusts plug-in
+folders that come from a module found at start-up. So `cmds.loadPlugin('i3dGltf')` in any
+session started after the install loads without a prompt. Only the session that ran the
+installer, where the folder is not yet a module, shows Maya's "Untrusted Plugin Loading"
+warning once (Allow / Deny). The installer does not change the security preferences.
+
+A host can detect an install without running Maya by looking for `i3dGltf.mod` in, first,
+the user app dir's `modules` folder above. `<Documents>` is the user's Documents folder as
+Windows reports it (`SHGetKnownFolderPath(FOLDERID_Documents)`), which is often redirected;
+do not assume `%USERPROFILE%\Documents`. Manual installs can also put the file in Maya's
+other module folders:
+
 - `<Documents>\maya\<version>\modules\`
 - `%CommonProgramFiles%\Autodesk Shared\Modules\maya\<version>\`
 - every folder listed in the `MAYA_MODULE_PATH` environment variable
-
-`<Documents>` is the user's Documents folder as Windows reports it, which is often
-redirected (for example into OneDrive); do not assume `%USERPROFILE%\Documents`.
 
 The first line of the file is always
 
     + i3dGltf <version> <path>
 
-so the installed version can be read from the file itself.
+so the installed version can be read from the file itself. The installer writes the path
+relative to the folder holding the `.mod` file (`+ i3dGltf 0.4.0 ./i3dGltf`); resolve a
+relative path against that folder. Manual installs may use an absolute path.
 
 Finding the file is a hint, not proof. The authority is Maya: `cmds.loadPlugin('i3dGltf')`
 either succeeds or raises.
@@ -43,7 +94,7 @@ either succeeds or raises.
 ## 2. Version
 
 ```python
-cmds.pluginInfo('i3dGltf', query=True, version=True)   # '0.3.0', after the plug-in is loaded
+cmds.pluginInfo('i3dGltf', query=True, version=True)   # '0.4.0', after the plug-in is loaded
 import i3d_gltf; i3d_gltf.__version__                  # same string
 ```
 
@@ -93,6 +144,9 @@ Notes:
   way: rotations stored with cubic-spline interpolation. Their keys are exact but the values
   between keys are approximate, and the report carries a warning. `animSampling=bake` gives
   exact values on every frame.
+- **The options window does not affect scripted calls.** Maya's file dialogs remember the
+  window's last settings in the optionVar `IRONIC3D glTFOptions`; `cmds.file` does not
+  read it, so a call gets the defaults above plus its own `options` (tested).
 - **There is no up-axis option.** glTF is Y-up. In a Z-up Maya scene the imported roots
   are rotated automatically.
 - **Geometry is never converted.** Triangles arrive as triangles.
@@ -187,6 +241,7 @@ materials.
 ## 8. Text for a "Read more" panel
 
 > Maya has no built-in glTF importer. To send glTF and GLB files to Maya, install
-> IRONIC3D glTF for Maya, a free, open-source plug-in for Maya 2024 to 2027. Download it
-> from https://ironic3d.com.au/apps/ironic3d-gltf-for-maya or get the source on GitHub,
-> then restart Maya.
+> IRONIC3D glTF for Maya, a free, open-source plug-in for Maya 2024 to 2027: download the
+> zip from https://ironic3d.com.au/apps/ironic3d-gltf-for-maya or from the releases on
+> https://github.com/IRONIC3D/i3d-gltf-for-maya, unzip it and drag install_i3dGltf.py onto
+> the Maya viewport. It loads straight away, without restarting Maya.

@@ -2,6 +2,7 @@
 baked in) and how meshes are shared between nodes. No Maya imports.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -52,6 +53,7 @@ class NodePlan:
     shape: Optional[int] = None  # index into ScenePlan.shapes
     joint: bool = False          # created as a Maya joint
     skinned_leaf: bool = False   # holds a skinned shape directly: identity TRS, no inheritance
+    joint_radius: Optional[float] = None  # display radius for a joint (see joint_radii)
 
 
 @dataclass
@@ -149,6 +151,81 @@ def joint_nodes(doc, parent, visited):
     return joints | between, bad_skins
 
 
+def _local_affine(node):
+    """(3x3 row-major matrix, translation) of a NodePlan's rest transform."""
+    if node.matrix is not None:
+        m = node.matrix  # glTF column-major
+        return [[m[0], m[4], m[8]], [m[1], m[5], m[9]], [m[2], m[6], m[10]]], [m[12], m[13], m[14]]
+    x, y, z, w = node.rotation
+    n = math.sqrt(x * x + y * y + z * z + w * w) or 1.0
+    x, y, z, w = x / n, y / n, z / n, w / n
+    r = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+         [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+    s = node.scale
+    return [[r[i][j] * s[j] for j in range(3)] for i in range(3)], list(node.translation)
+
+
+def _det3(m):
+    return (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
+
+
+#: joint display radius = this fraction of the skeleton's rest-pose extent (bounding box
+#: diagonal), but at most JOINT_RADIUS_BONE_FRACTION of its median bone length
+JOINT_RADIUS_EXTENT_FRACTION = 0.01
+JOINT_RADIUS_BONE_FRACTION = 0.5
+
+
+def joint_radii(nodes, order, joints, unit_scale_factor):
+    """Display radius per joint node, relative to the size of its skeleton (Maya's default
+    radius of 1 is 1 cm, invisible on large skeletons and huge on small ones).
+
+    For each skeleton (a chain of joints under one top joint) the world-space rest-pose
+    joint positions give R = min(1% of their bounding box diagonal, half the median bone
+    length). A skeleton without extent (a single joint) gets 1 cm x the scale option.
+    Maya draws the radius in the joint's own space, so each joint gets R divided by its
+    world scale. Values are rounded to 4 significant digits (deterministic)."""
+    world = {}
+    for i in order:
+        m, t = _local_affine(nodes[i])
+        p = nodes[i].parent
+        if p is not None and p in world:
+            pm, pt = world[p]
+            m = [[sum(pm[r][k] * m[k][c] for k in range(3)) for c in range(3)] for r in range(3)]
+            t = [sum(pm[r][k] * t[k] for k in range(3)) + pt[r] for r in range(3)]
+        world[i] = (m, t)
+    joint_set = set(joints)
+    top = {}
+    for j in sorted(joint_set):
+        k = j
+        while nodes[k].parent in joint_set:
+            k = nodes[k].parent
+        top[j] = k
+    skeletons = {}
+    for j, k in top.items():
+        skeletons.setdefault(k, []).append(j)
+    radii = {}
+    for k, members in sorted(skeletons.items()):
+        pos = [world[j][1] for j in members]
+        diag = math.sqrt(sum((max(p[a] for p in pos) - min(p[a] for p in pos)) ** 2 for a in range(3)))
+        bones = sorted(math.sqrt(sum((world[j][1][a] - world[nodes[j].parent][1][a]) ** 2 for a in range(3)))
+                       for j in members if nodes[j].parent in joint_set)
+        bones = [b for b in bones if b > 1e-9]
+        if diag > 1e-9:
+            r = diag * JOINT_RADIUS_EXTENT_FRACTION
+            if bones:
+                r = min(r, bones[len(bones) // 2] * JOINT_RADIUS_BONE_FRACTION)
+        else:
+            r = unit_scale_factor / METERS_TO_CENTIMETERS
+        for j in members:
+            s = abs(_det3(world[j][0])) ** (1.0 / 3.0)
+            if s > 1e-12:
+                radii[j] = float("%.4g" % (r / s))
+    return radii
+
+
 def _has_skin_attributes(mesh):
     return any("JOINTS_0" in p.attributes and "WEIGHTS_0" in p.attributes for p in mesh.primitives)
 
@@ -219,6 +296,8 @@ def build_scene_plan(doc, options, reporter=None):
     joints, bad_skins = joint_nodes(doc, parent, visited)
     for i in joints:
         nodes[i].joint = True
+    for i, radius in joint_radii(nodes, order, joints, factor).items():
+        nodes[i].joint_radius = radius
     animated = animated_nodes(doc)
 
     # mesh sharing: nodes with the same mesh share one shape (Maya instancing), except

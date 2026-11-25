@@ -108,9 +108,67 @@ def _default_load_arnold():
         return False
 
 
+def _default_arnold_loaded():
+    try:
+        return bool(cmds.pluginInfo(ARNOLD_PLUGIN, q=True, loaded=True))
+    except RuntimeError:
+        return False
+
+
+def _default_arnold_installed():
+    """True when the mtoa plug-in file is on MAYA_PLUG_IN_PATH. Only looks at files: never
+    loads the plug-in."""
+    import maya.mel as mel
+    names = ("mtoa.mll", "mtoa.so", "mtoa.bundle")
+    for folder in (mel.eval('getenv "MAYA_PLUG_IN_PATH"') or "").split(os.pathsep):
+        if folder and any(os.path.isfile(os.path.join(folder, n)) for n in names):
+            return True
+    return False
+
+
 #: Hooks: tests replace these to simulate a session without Arnold / without openPBRSurface.
 node_type_exists = _default_node_type_exists
 load_arnold = _default_load_arnold
+arnold_loaded = _default_arnold_loaded
+arnold_installed = _default_arnold_installed
+
+#: shader_availability() statuses
+AVAILABLE = "available"            # the node type exists in this session
+ARNOLD_ON_IMPORT = "arnoldOnImport"  # Arnold type; mtoa is installed but not loaded (loaded by the import)
+UNAVAILABLE = "unavailable"        # the import falls back to ``fallback``
+
+
+def shader_availability(choices, exists=None, arnold_is_loaded=None, arnold_is_installed=None):
+    """For each ``shader`` option value: (value, status, fallback). Used by the options
+    window to mark types this session cannot build. Never loads a plug-in: an Arnold type
+    with mtoa installed but not loaded is ARNOLD_ON_IMPORT (the import loads mtoa; if that
+    mtoa has no such node the import still falls back, with a warning)."""
+    exists = exists or node_type_exists
+    loaded = arnold_loaded() if arnold_is_loaded is None else arnold_is_loaded
+    installed = None  # looked up lazily: only needed when mtoa is not loaded
+
+    def state(t):
+        nonlocal installed
+        if exists(t):
+            return AVAILABLE
+        if t in ARNOLD_TYPES and not loaded:
+            if installed is None:
+                installed = arnold_installed() if arnold_is_installed is None else arnold_is_installed
+            if installed:
+                return ARNOLD_ON_IMPORT
+        return UNAVAILABLE
+
+    out = []
+    for value in choices:
+        if value not in FALLBACK_CHAINS:  # "none"
+            out.append((value, AVAILABLE, None))
+            continue
+        status = state(value)
+        fallback = None
+        if status == UNAVAILABLE:
+            fallback = next((t for t in FALLBACK_CHAINS[value][1:] if state(t) != UNAVAILABLE), None)
+        out.append((value, status, fallback))
+    return out
 
 
 def resolve_shader_type(requested, reporter):

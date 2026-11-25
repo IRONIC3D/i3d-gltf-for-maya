@@ -24,7 +24,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "scripts"))
+if "--use-installed" not in sys.argv:
+    sys.path.insert(0, os.path.join(REPO, "scripts"))
 sys.path.insert(0, HERE)
 
 T = "IRONIC3D glTF"
@@ -111,6 +112,9 @@ def main():
     ap.add_argument("--texture-dir", default=None)
     ap.add_argument("--no-reference", action="store_true")
     ap.add_argument("--json", default=None)
+    ap.add_argument("--no-autotx", action="store_true", help="turn off Arnold auto-TX before importing")
+    ap.add_argument("--use-installed", action="store_true",
+                    help="load the plug-in Maya finds by itself (e.g. an installed release), not this repository")
     args = ap.parse_args()
     folder = os.path.abspath(args.folder)
     tex_dir = os.path.abspath(args.texture_dir or tempfile.mkdtemp(prefix="i3d_samples_tex_"))
@@ -118,13 +122,27 @@ def main():
         sys.exit("--texture-dir must not be inside the sample folder")
 
     os.environ.setdefault("MAYA_SKIP_USERSETUP_PY", "1")
-    if REPO not in os.environ.get("MAYA_MODULE_PATH", ""):
+    if not args.use_installed and REPO not in os.environ.get("MAYA_MODULE_PATH", ""):
         os.environ["MAYA_MODULE_PATH"] = REPO + os.pathsep + os.environ.get("MAYA_MODULE_PATH", "")
     import maya.standalone
     maya.standalone.initialize(name="python")
     import maya.cmds as cmds
-    from i3d_gltf.maya import importer
     cmds.loadPlugin("i3dGltf")
+    from i3d_gltf.maya import importer
+    plugin_path = cmds.pluginInfo("i3dGltf", q=True, path=True)
+    print("PLUGIN %s %s  package %s" % (cmds.pluginInfo("i3dGltf", q=True, version=True), plugin_path,
+                                        os.path.dirname(importer.__file__)))
+    if args.use_installed and os.path.normcase(os.path.abspath(plugin_path)).startswith(os.path.normcase(REPO)):
+        sys.exit("--use-installed, but the plug-in was loaded from the repository")
+    if args.no_autotx:
+        try:
+            cmds.loadPlugin("mtoa", quiet=True)
+            import mtoa.core
+            mtoa.core.createOptions()
+            cmds.setAttr("defaultArnoldRenderOptions.autotx", False)
+            print("Arnold auto-TX off")
+        except Exception as exc:
+            print("Could not turn off Arnold auto-TX: %s" % exc)
     project = tempfile.mkdtemp(prefix="i3d_samples_proj_")
     cmds.workspace(project, openWorkspace=True)
     options = "shader=%s;textureDir=%s" % (args.shader, tex_dir.replace("\\", "/"))

@@ -279,6 +279,8 @@ class SceneBuilder(object):
             fn = om.MFnTransform(obj)
             # glTF scale semantics: a child does not compensate its parent's scale
             fn.findPlug("segmentScaleCompensate", False).setBool(False)
+            if node.joint_radius is not None:
+                fn.findPlug("radius", False).setDouble(node.joint_radius)
         else:
             fn = om.MFnTransform()
             obj = fn.create(parent)

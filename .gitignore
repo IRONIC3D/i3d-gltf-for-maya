@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Downloaded third-party sample models (licences vary; never commit)
+_samples/
+
+# Test / tool output
+_logs/
+*.log
+
+# Maya side files
+*.swatches
+incrementalSave/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

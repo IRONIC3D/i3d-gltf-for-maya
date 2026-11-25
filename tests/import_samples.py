@@ -91,9 +91,16 @@ def material_features(doc):
             if "COLOR_0" in p.attributes and p.material is not None:
                 feats.add("COLOR_0 on a material primitive")
     if doc.skins:
-        feats.add("skins (milestone 3)")
+        feats.add("skins")
     if doc.animations:
-        feats.add("animations (milestone 3)")
+        feats.add("animations")
+        if len(doc.animations) > 1:
+            feats.add("several animations")
+        for a in doc.animations:
+            for smp in a.samplers:
+                feats.add("interpolation " + smp.interpolation)
+    if any(p.targets for mesh in doc.meshes for p in mesh.primitives):
+        feats.add("morph targets")
     return feats
 
 
@@ -157,15 +164,16 @@ def main():
                 row[mode] = "FAILED"
                 failures += 1
                 continue
-            meshes = cmds.ls("smp:*", type="mesh") or []
+            meshes = cmds.ls("smp:*", type="mesh", noIntermediate=True) or []
             faces = sum(cmds.polyEvaluate(m, face=True) for m in meshes)
             res = importer.last_result()
             linked, missing, skipped = res.texture_stats()
             ws = sorted(set(res.reporter.warnings))
             line.append("%s: ok %.2fs roots=%d meshes=%d faces=%d shader=%s materials=%d textures=%d "
-                        "missing=%d skipped=%d warnings=%d"
+                        "missing=%d skipped=%d skins=%d blendShapes=%d curves=%d warnings=%d"
                         % (mode, time.time() - t, len(new), len(meshes), faces, res.shader_type,
-                           len(res.shaders), linked, missing, skipped, len(ws)))
+                           len(res.shaders), linked, missing, skipped, len(res.skin_clusters),
+                           len(res.blend_shapes), len(res.anim_curves), len(ws)))
             row[mode] = "ok"
             if mode == "import":
                 row.update(materials=len(res.shaders), textures=linked, missing=missing, skipped=skipped,

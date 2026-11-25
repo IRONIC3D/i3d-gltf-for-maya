@@ -37,6 +37,14 @@ IMPORT_OPTION_SPECS = (
     OptionSpec("textureDir", "str", "",
                doc="Folder for textures extracted from GLB / data URIs (a per-file subfolder is added). "
                    "Default: <project>/sourceimages/i3dGltf."),
+    OptionSpec("animation", "str", "first",
+               doc="Which glTF animation to import: 'first', 'none', an index (0, 1, ...) or an animation name. "
+                   "An index or name that does not exist gives a warning and imports the first."),
+    OptionSpec("animSampling", "enum", "keys", choices=("keys", "bake"),
+               doc="'keys': keys exactly where the file has them. 'bake': one key per frame at the scene "
+                   "frame rate (for curves Maya cannot represent exactly, e.g. CUBICSPLINE rotations)."),
+    OptionSpec("timeRange", "bool", True,
+               doc="Set the playback range to the imported animation on import (never for references)."),
 )
 
 _TRUE = ("1", "true", "yes", "on")

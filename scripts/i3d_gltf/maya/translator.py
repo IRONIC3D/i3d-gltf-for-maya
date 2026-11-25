@@ -62,8 +62,14 @@ class GltfTranslator(ompx.MPxFileTranslator):
 
     def reader(self, file_object, options_string, mode):
         path = file_object.expandedFullName() or file_object.resolvedFullName()
+        if mode == ompx.MPxFileTranslator.kReferenceAccessMode:
+            access = "reference"
+        elif mode == ompx.MPxFileTranslator.kOpenAccessMode:
+            access = "open"
+        else:
+            access = "import"
         try:
-            importer.import_file(path, options_string or "")
+            importer.import_file(path, options_string or "", access=access)
         except GltfError as exc:
             message = "%s import failed for '%s': %s" % (TRANSLATOR_NAME, path, exc)
             om1.MGlobal.displayError(message)

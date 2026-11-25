@@ -32,11 +32,12 @@ class TestPluginRegistration(MayaTestCase):
         self.assertTrue(cmds.translator(T, q=True, readSupport=True))
         self.assertFalse(cmds.translator(T, q=True, writeSupport=True))
         self.assertEqual(cmds.translator(T, q=True, defaultOptions=True),
-                         "scale=1.0;importNormals=1;importColors=1;shader=aiStandardSurface;textureDir=")
+                         "scale=1.0;importNormals=1;importColors=1;shader=aiStandardSurface;textureDir=;animation=first;animSampling=keys;timeRange=1")
 
     def test_version_single_source(self):
         self.assertEqual(cmds.pluginInfo(PLUGIN, q=True, version=True), i3d_gltf.VERSION)
-        self.assertEqual(i3d_gltf.VERSION, "0.2.0")
+        self.assertEqual(i3d_gltf.VERSION, "0.3.0")
+        self.assertEqual(i3d_gltf.__version__, i3d_gltf.VERSION)
         repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         with open(os.path.join(repo, "i3dGltf.mod")) as f:
             self.assertIn(" %s " % i3d_gltf.VERSION, f.read())

@@ -4,7 +4,17 @@ A pure-Python glTF 2.0 importer for Autodesk Maya. It registers a Maya file tran
 so `.gltf` and `.glb` files work with File > Import, File > Create Reference and `cmds.file`.
 No compiled code and no third-party packages (numpy is not required).
 
-Status: **0.2.0, milestone 2 (materials and textures).** Import only.
+Status: **0.3.0, milestone 3 (skins, morph targets, animation).** Import only.
+
+## Works with Dayum
+
+IRONIC3D glTF for Maya works with [Dayum](https://usedayum.com), a digital asset manager.
+Support is coming in a Dayum update: when Dayum exports a project to Maya and this plug-in is
+installed, the project's build script imports its glTF and GLB assets into the scene or as
+references, with Arnold or Standard Surface materials built from the files. The plug-in is a
+separate, free download; Dayum does not include it.
+
+Documentation and downloads: https://ironic3d.com.au/apps/ironic3d-gltf-for-maya
 
 ## Supported Maya versions
 
@@ -16,7 +26,7 @@ The code is plain Python 3.10+ and has no platform-specific parts, but macOS and
 Add the repository folder to `MAYA_MODULE_PATH` (it contains `i3dGltf.mod`), for example in `Maya.env`:
 
 ```
-MAYA_MODULE_PATH=C:/src/Maya_gLTF
+MAYA_MODULE_PATH=C:/path/to/i3d-gltf-for-maya
 ```
 
 Then load the plug-in from the Plug-in Manager, or:
@@ -43,7 +53,13 @@ cmds.file(path, reference=True, type="IRONIC3D glTF", namespace="asset",
 # with options
 cmds.file(path, i=True, type="IRONIC3D glTF", options="scale=0.01;importColors=0")
 cmds.file(path, i=True, type="IRONIC3D glTF", options="shader=openPBRSurface;textureDir=D:/tex")
+cmds.file(path, i=True, type="IRONIC3D glTF", options="animation=Walk;animSampling=bake")
 ```
+
+Host applications that drive the importer from scripts: see [CONTRACT.md](CONTRACT.md). After any
+`cmds.file` call, `i3d_gltf.maya.importer.last_report()` returns a JSON-serialisable dict for that
+load (success or failure, roots, materials, textures, animation, skin and blendShape counts,
+warnings); check its `ok` after a reference, since Maya does not raise when a reference fails.
 
 ### Options
 
@@ -56,18 +72,23 @@ Passed as `key=value;key=value` in the `options` flag.
 | `importColors`  | `1`     | Import `COLOR_n` as colour sets. |
 | `shader`        | `aiStandardSurface` | Shader node type for glTF materials: `aiStandardSurface`, `aiOpenPBRSurface`, `openPBRSurface`, `standardSurface`, or `none` (no materials; everything on `initialShadingGroup`). |
 | `textureDir`    | *(empty)* | Base folder for textures extracted from GLB files and data URIs. Empty: `<current project>/<sourceImages file rule>/i3dGltf`. A relative path is relative to the project. A per-file subfolder is always added (see Textures). |
+| `animation`     | `first` | Which glTF animation to import: `first`, `none`, an index (`0`, `1`, ...) or an animation name. An index or name that does not exist gives a warning and imports the first. |
+| `animSampling`  | `keys`  | `keys`: keys exactly at the file's times. `bake`: one key per frame at the scene frame rate, evaluated with the glTF rules (for curves Maya cannot represent exactly, see Animation). |
+| `timeRange`     | `1`     | Set the playback and animation range to the imported animation (import and File > Open only, see Animation). |
 
 Unknown keys and invalid values are reported as warnings and the default is used.
 Values cannot contain `;`.
 
 ### What you get
 
-* The default scene's node hierarchy as transforms (TRS or matrix, decomposed into channels).
+* The default scene's node hierarchy as transforms (TRS or matrix, decomposed into channels),
+  and joints for skeletons (see Skins).
 * One Maya mesh per glTF mesh, all triangle primitives merged. Triangles stay triangles:
   no quad merging, no welding, no cleanup. Triangle strips and fans become their triangles.
 * `TEXCOORD_n` as UV sets `map1`, `map2`, ... (V flipped), `COLOR_n` as colour sets
   `colorSet1`, ... (RGB or RGBA), normals as locked normals.
-* A glTF mesh used by several nodes becomes a Maya instance (one shape, several parents).
+* A glTF mesh used by several nodes becomes a Maya instance (one shape, several parents),
+  unless it is skinned or has morph targets.
 * Node names come from the glTF file (characters outside `A-Z a-z 0-9 _` become `_`,
   unnamed nodes become `node_<index>`), so re-loading a reference re-creates the same
   names and reference edits are re-applied.
@@ -78,7 +99,72 @@ Values cannot contain `;`.
   `initialShadingGroup`. Shading node names come from the material and image names with the
   same rules, so reference edits on materials (e.g. a changed colour) are re-applied.
 
+### Skins
+
+* Every glTF node a skin uses as a joint becomes a Maya `joint`, with the glTF hierarchy and
+  names. Nodes that sit between two joints (in no skin themselves) also become joints, so a
+  skeleton is one unbroken joint chain; they are not influences. Nodes above the top joints
+  (for example an `Armature` node) stay transforms.
+* Joint rotation stays in the `rotate` channels (`jointOrient` and `rotateAxis` are zero), so
+  animation maps one to one, and `segmentScaleCompensate` is off (glTF scale semantics: a
+  child inherits its parent's scale).
+* One `skinCluster` per skinned shape (`<node>_skinCluster`): classic linear skinning, one
+  influence per skin joint in skin order, `bindPreMatrix` = the file's `inverseBindMatrices`
+  (translation scaled like everything else), every `JOINTS_n`/`WEIGHTS_n` set (more than 4
+  influences), weights normalised on import (normalisation mode interactive, so painting keeps
+  them normalised), `deformUserNormals` on so the imported locked normals follow the joints.
+  No `dagPose` is kept: it would record the import pose, not the file's bind pose.
+* glTF ignores the transform of a skinned mesh's own node. The skinned shape therefore sits
+  under a transform with identity TRS and `inheritsTransform` off: the node's own transform
+  when it is a plain leaf (no children, not a joint, never animated; its file TRS is dropped),
+  otherwise an extra child transform `<node>_skinned`. The mesh is where its joints put it,
+  whatever its parents do, and follows the skeleton when the skeleton root moves.
+* Skinned and morphed meshes are never Maya instances (one deformer per shape).
+* Skins whose joints are outside the imported scene, and skinned meshes without
+  `JOINTS_0`/`WEIGHTS_0`, are imported unskinned with a warning.
+
+### Morph targets
+
+* One `blendShape` per morphed shape (`<node>_blendShape`), created before the skinCluster
+  (glTF applies morph targets, then skinning). No target meshes are created: the `POSITION`
+  deltas (including sparse accessors) are written directly into the blendShape.
+* Weights are aliased with the names from `mesh.extras.targetNames` (sanitised, made unique),
+  or `target_<i>`. Initial weights: the node's `weights`, else the mesh's, else 0.
+* `NORMAL` and `TANGENT` deltas are not imported (the shape keeps its own normals).
+
+### Animation
+
+* One glTF animation per import (`animation` option). Curves are named `<node>_<attribute>`
+  (`Hips_rotateX`) and `<node>_<target name>` for morph weights, and connect to the joint or
+  transform channels and to the blendShape weights.
+* Keys are placed at the file's times in seconds, independent of the scene frame rate (not
+  snapped to frames). Translations are scaled like the geometry.
+* `STEP` -> stepped keys; `LINEAR` -> linear keys; `CUBICSPLINE` -> the file's in/out tangents
+  as fixed, non-weighted Maya tangents (the same cubic Hermite curve, exact).
+* Rotations become Euler `rotateX/Y/Z` (rotate order xyz), continuity filtered. `LINEAR`
+  rotations use Maya's *Quaternion Slerp* rotation interpolation on the three curves, which
+  evaluates exactly like glTF's quaternion slerp (measured to about 1e-6 degrees between keys
+  on Maya 2024-2027). `STEP` rotations are exact Euler steps. `CUBICSPLINE` rotations have no
+  exact Maya equivalent (glTF interpolates quaternion components and normalises): the keys are
+  exact and the Euler tangents follow the glTF curve at each key, but values between keys are
+  approximate, with a warning; import with `animSampling=bake` for frame-exact values.
+* `timeRange`: an import (or File > Open of a .gltf/.glb) sets the playback and animation
+  range to the animation's first and last key, rounded outwards to frames; with repeated
+  imports the last one wins. References never change the range: they are read again every
+  time the scene opens, and the scene already stores the range the user chose.
+* Channels that target nodes outside the imported scene, `KHR_animation_pointer` targets and
+  `weights` channels on nodes without morph targets are skipped (warning or info).
+
 ### Materials
+
+| Shader | Renderer | Status |
+|---|---|---|
+| `aiStandardSurface`, `aiOpenPBRSurface` | Arnold | Available |
+| `standardSurface`, `openPBRSurface` | Maya | Available |
+| `PxrSurface` | RenderMan | Coming next |
+| `dlPrincipled` | 3Delight | Coming next |
+| Redshift material | Redshift | Planned |
+| V-Ray material | V-Ray | Planned |
 
 The `shader` option picks the node type. Availability is checked at import time (never by Maya
 version); if the type is missing, the first available type along this chain is used, with one
@@ -153,8 +239,8 @@ when a reference fails to load; it prints the error and keeps an empty reference
 
 ### Not supported yet
 
-Animation, skins, morph targets (parsed, not built), cameras, lights, an options dialog, and
-export. Points and lines primitives are skipped with a warning. Files that require
+Importing several animations at once (Time Editor clips), morph target normals/tangents,
+`KHR_animation_pointer`, cameras, lights, an options dialog, and export. Points and lines primitives are skipped with a warning. Files that require
 `KHR_draco_mesh_compression`, `EXT_meshopt_compression` or other unsupported geometry
 extensions are refused with a message naming the extension.
 
@@ -166,10 +252,17 @@ mayapy tests/run_suite.py --maya # one Maya version
 python tests/run_suite.py        # core tests only, no Maya needed
 ```
 
-Test fixtures are generated in code. `tests/perf_large_mesh.py` times a 1M-triangle import, and
+Test fixtures are generated in code. `tests/perf_large_mesh.py` times a 1M-triangle import,
+`tests/perf_skinned.py` a 100k-vertex skinned and animated import, and
 `mayapy tests/import_samples.py <folder> [--shader X] [--texture-dir D] [--no-reference]` imports
 and references every file in a folder of sample models, reports materials and textures per file,
 and tallies warnings and the glTF features used (it never writes into `<folder>`).
+
+Skins, morph targets and animation are checked against `tests/gltf_eval.py`, an independent
+pure-Python implementation of the glTF spec (node matrices from animated TRS, morph blending,
+linear blend skinning). `mayapy tests/compare_samples.py <files or folders> [--all-animations]`
+imports each file and reports the largest difference between Maya's deformed world-space
+vertices and the reference at several times, including between keys.
 
 ## License and trademarks
 

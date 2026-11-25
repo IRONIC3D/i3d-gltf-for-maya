@@ -22,7 +22,7 @@ class TestOptions(unittest.TestCase):
         o = parse_options("")
         self.assertEqual((o.scale, o.importNormals, o.importColors), (1.0, True, True))
         self.assertEqual(default_options_string(),
-                         "scale=1.0;importNormals=1;importColors=1;shader=aiStandardSurface;textureDir=")
+                         "scale=1.0;importNormals=1;importColors=1;shader=aiStandardSurface;textureDir=;animation=first;animSampling=keys;timeRange=1")
 
     def test_overrides_last_wins(self):
         # Maya prepends the default options string to the caller's options.

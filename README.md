@@ -9,10 +9,10 @@ Status: **0.5.0, milestone 5 (RenderMan PxrSurface and 3Delight dlPrincipled mat
 ## Works with Dayum
 
 IRONIC3D glTF for Maya works with [Dayum](https://usedayum.com), a digital asset manager.
-Support is coming in a Dayum update: when Dayum exports a project to Maya and this plug-in is
-installed, the project's build script imports its glTF and GLB assets into the scene or as
-references, with Arnold or Standard Surface materials built from the files. The plug-in is a
-separate, free download; Dayum does not include it.
+When Dayum exports a project to Maya and this plug-in is installed, the project's build script
+imports its glTF and GLB assets into the scene or as references, with Arnold or Standard Surface
+materials built from the files. The plug-in is a separate, free download; Dayum does not
+include it.
 
 Documentation and downloads: https://ironic3d.com.au/apps/ironic3d-gltf-for-maya
 

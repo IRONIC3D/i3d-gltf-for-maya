@@ -14,6 +14,13 @@ imports its glTF and GLB assets into the scene or as references, with Arnold or 
 materials built from the files. The plug-in is a separate, free download; Dayum does not
 include it.
 
+<p>
+  <img src="docs/images/dayum-maya-export.png" alt="Dayum's Export to Maya dialog reporting that IRONIC3D glTF for Maya was found" width="34%">
+  <img src="docs/images/maya-reference-result.png" alt="The exported glTF scene loaded in Maya as a reference, with its material network" width="64%">
+</p>
+
+*Left: Dayum's Maya export finds the plug-in. Right: the glTF scene in Maya as a reference.*
+
 Documentation and downloads: https://ironic3d.com.au/apps/ironic3d-gltf-for-maya
 
 ## Supported Maya versions
@@ -104,6 +111,8 @@ menu lists every type with its renderer, marks a renderer that is installed but 
 Maya 2024, Arnold types without MtoA, `PxrSurface` without RenderMan for Maya) with the type the import
 will use instead; opening the window never loads a renderer plug-in. Maya remembers the last settings (optionVar `IRONIC3D glTFOptions`) for its file
 dialogs only; scripted `cmds.file` calls get the defaults plus their own `options`.
+
+![The import options in Maya's File > Import dialog](docs/images/maya-import-options.png)
 
 From scripts, options are passed as `key=value;key=value` in the `options` flag.
 

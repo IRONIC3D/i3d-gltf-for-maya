@@ -232,7 +232,7 @@ class TestPxrSurface(MayaTestCase):
         self.load()
         tex = self.n("Checker_tex_1")
         m = source_of(tex + ".manifold").split(".")[0]
-        self.assertEqual(strip(m), "Checker_manifold")
+        self.assertTrue(strip(m).startswith("Checker_manifold"))
         self.assertEqual(cmds.nodeType(m), "PxrManifold2D")
         t = fixtures.TRANSFORM
         want = manifold2d_from_transform(t["offset"], t["rotation"], t["scale"])
@@ -241,7 +241,13 @@ class TestPxrSurface(MayaTestCase):
             self.assertAlmostEqual(g, w, 4)
         self.assertTrue(cmds.getAttr(m + ".invertT"))
         self.assertEqual(cmds.getAttr(m + ".name_uvSet"), "map2")
-        self.assertIsNone(source_of(self.n("Checker_tex.manifold")))  # no transform: no manifold
+        # no transform: still a manifold (recommended RenderMan network), at its defaults
+        plain = source_of(self.n("Checker_tex.manifold")).split(".")[0]
+        self.assertEqual(cmds.nodeType(plain), "PxrManifold2D")
+        self.assertNotEqual(plain, m)
+        self.assertEqual([cmds.getAttr(plain + "." + a) for a in ("scaleS", "scaleT", "offsetS", "offsetT", "angle")],
+                         [1.0, 1.0, 0.0, 0.0, 0.0])
+        self.assertTrue(cmds.getAttr(plain + ".invertT"))
         self.assertEqual(source_of(self.n("Transformed_metallicWorkflow.baseColor")), tex + ".resultRGB")
 
     def test_spec_gloss_and_clearcoat(self):

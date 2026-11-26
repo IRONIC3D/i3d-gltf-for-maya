@@ -247,7 +247,7 @@ From 0.5.0, `shader=PxrSurface` builds RenderMan for Maya materials and
 | | `PxrSurface` (RenderMan) | `dlPrincipled` (3Delight) |
 |---|---|---|
 | Renderer plug-in | `RenderMan_for_Maya` | `plugin_3delight_for_maya` |
-| Textures | `PxrTexture`, `linearize` on for colour maps (base colour, emissive), off for data maps (metallic-roughness, normal) | Maya `file` + `place2dTexture`, colour space sRGB / Raw as for the other shaders |
+| Textures | `PxrTexture` with a `PxrManifold2D` on its manifold port, `linearize` on for colour maps (base colour, emissive), off for data maps (metallic-roughness, normal) | Maya `file` + `place2dTexture`, colour space sRGB / Raw as for the other shaders |
 | Metal/roughness | `PxrMetallicWorkflow` into diffuse / specular face / edge colour; Artistic fresnel, GGX | `metallic`, `roughness` |
 | Normal map | `PxrNormalMap` (OpenGL, `bumpScale` = normal scale) into `bumpNormal` | `disp_normal_bump_value`, type Normal Map (OpenGL), intensity = normal scale |
 | Alpha | `presence` (MASK through `PxrThreshold`) | `opacity` (MASK through `condition`) |

@@ -260,8 +260,9 @@ RenderMan (`PxrSurface`), built like Dayum's own RenderMan materials:
 * Normal map through `PxrNormalMap` (OpenGL orientation, `bumpScale` = normal scale) into
   `bumpNormal`; emissive into `glowColor` x `glowGain`; alpha into `presence` (`MASK` through
   `PxrThreshold`); `doubleSided` also turns on the lobes' double-sided switches.
-* `KHR_texture_transform` and a second UV set through `PxrManifold2D` (same image orientation as
-  Maya's file node; `name_uvSet` = `map2`, ...). Sampler wrap modes set `swrap`/`twrap` (RenderMan 28).
+* Every `PxrTexture` has a `PxrManifold2D` on its manifold port (RenderMan's recommended network), so
+  repeat, offset and rotation can be edited there. It carries `KHR_texture_transform` and the UV set
+  (`name_uvSet` = `map2`, ...), with the same image orientation as Maya's file node. Sampler wrap modes set `swrap`/`twrap` (RenderMan 28).
 * Clearcoat, sheen (`fuzz`), transmission (`refraction`, `glassIor`) and spec-gloss are approximated.
 
 3Delight (`dlPrincipled`): the same Maya file / place2dTexture networks as for the other shaders

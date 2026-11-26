@@ -709,11 +709,11 @@ class PxrSurfaceBuilder(MaterialBuilder):
         for data maps (metallic-roughness, occlusion, normal, ...). swrap / twrap from the
         sampler (REPEAT periodic, MIRRORED_REPEAT mirror, CLAMP_TO_EDGE clamp) where
         PxrTexture has them (RenderMan 28); older PxrTexture always repeats, with a warning.
-      * KHR_texture_transform and TEXCOORD_n (n > 0): a PxrManifold2D (``<image>_manifold``)
-        into PxrTexture.manifold, values from core.materials.manifold2d_from_transform, its
-        invertT left on (default) so the image is the same way up as with Maya's file node;
-        name_uvSet = ``map<n+1>`` for another UV set. Without either, PxrTexture reads ``st``
-        with its own invertT (default on): the same orientation.
+      * Every PxrTexture gets a PxrManifold2D (``<image>_manifold``) into its manifold port
+        (RenderMan's recommended network: the artist can repeat, offset and rotate there).
+        KHR_texture_transform sets its values (core.materials.manifold2d_from_transform),
+        invertT is left on (default) so the image is the same way up as with Maya's file
+        node, and name_uvSet = ``map<n+1>`` for TEXCOORD_n (n > 0).
       * Metal/roughness: PxrMetallicWorkflow (``<material>_metallicWorkflow``: baseColor,
         metallic, specular from the IOR) into diffuseColor, specularFaceColor and
         specularEdgeColor. specularFresnelMode is set to Artistic because PxrMetallicWorkflow
@@ -756,16 +756,18 @@ class PxrSurfaceBuilder(MaterialBuilder):
                 self._set_attr(tex + ".twrap", self.WRAP.get(t.wrap_v, "periodic"), type="string")
             elif t.wrap_u != REPEAT or t.wrap_v != REPEAT:
                 no_wrap.append(tex)
-            if has_transform(t) or t.texcoord > 0:
-                m = self._node("PxrManifold2D", self.registry.claim(base + "_manifold"), asUtility=True)
+            # Always a PxrManifold2D, also without a transform: it is RenderMan's recommended
+            # network and gives the artist repeat / offset / rotation on every texture.
+            m = self._node("PxrManifold2D", self.registry.claim(base + "_manifold"), asUtility=True)
+            if has_transform(t):
                 ss, st, os_, ot, angle = manifold2d_from_transform(t.gltf_offset, t.gltf_rotation, t.gltf_scale)
                 for attr, value in (("scaleS", ss), ("scaleT", st), ("offsetS", os_), ("offsetT", ot),
                                     ("angle", angle)):
                     self._set_attr("%s.%s" % (m, attr), value)
-                if t.texcoord > 0:
-                    self._set_attr(m + ".name_uvSet", "map%d" % (t.texcoord + 1), type="string")
-                self._connect_attr(m + ".result", tex + ".manifold", force=True)
-                self.places[t.index] = m
+            if t.texcoord > 0:
+                self._set_attr(m + ".name_uvSet", "map%d" % (t.texcoord + 1), type="string")
+            self._connect_attr(m + ".result", tex + ".manifold", force=True)
+            self.places[t.index] = m
             self.files[t.index] = tex
         if no_wrap:
             self.reporter.warning("This RenderMan's PxrTexture has no wrap mode setting; %s repeat%s instead of "
